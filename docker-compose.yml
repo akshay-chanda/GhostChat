@@ -1,0 +1,46 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - '8080:80'
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      CORS_ORIGIN: http://localhost:8080
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET must be set — see backend/.env.example}
+      FILE_STORAGE_PATH: /app/uploads
+      MAX_FILE_SIZE: 20971520
+      # Uncomment to enable Redis-backed storage for horizontal
+      # scaling (see backend/src/config/redis.js and
+      # backend/src/storage/redisStore.js). Left unset by default —
+      # a single backend instance needs no Redis at all.
+      # REDIS_URL: redis://redis:6379
+    # depends_on:
+    #   redis:
+    #     condition: service_healthy
+    restart: unless-stopped
+
+  # Optional — only pulled in if you uncomment REDIS_URL above.
+  # Left defined but unused by default so `docker compose up` still
+  # works with zero configuration beyond SESSION_SECRET.
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    profiles:
+      - redis

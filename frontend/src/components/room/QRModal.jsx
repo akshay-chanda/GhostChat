@@ -1,0 +1,332 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import QRCode from 'qrcode';
+import { X, Copy, Check } from 'lucide-react';
+
+export default function QRModal({
+  open,
+  onClose,
+  shareLink,
+  roomId,
+}) {
+  const canvasRef = useRef(null);
+
+  const [copied, setCopied] = useState(false);
+
+  /*
+   * Always generate the share URL from the frontend.
+   *
+   * Example:
+   * http://localhost:5173/join/FWPFGTPL
+   */
+  const frontendShareLink = useMemo(() => {
+    if (
+      typeof window !== 'undefined' &&
+      roomId
+    ) {
+      return `${window.location.origin}/join/${roomId}`;
+    }
+
+    if (
+      typeof window !== 'undefined' &&
+      shareLink
+    ) {
+      try {
+        const url = new URL(shareLink);
+
+        return (
+          `${window.location.origin}` +
+          `${url.pathname}` +
+          `${url.search}` +
+          `${url.hash}`
+        );
+      } catch {
+        return shareLink;
+      }
+    }
+
+    return shareLink || '';
+  }, [roomId, shareLink]);
+
+  /*
+   * Generate QR code.
+   */
+  useEffect(() => {
+    if (
+      !open ||
+      !canvasRef.current ||
+      !frontendShareLink
+    ) {
+      return;
+    }
+
+    QRCode.toCanvas(
+      canvasRef.current,
+      frontendShareLink,
+      {
+        width: 220,
+        margin: 2,
+        color: {
+          dark: '#0B0F14',
+          light: '#F8FAFC',
+        },
+      }
+    );
+  }, [open, frontendShareLink]);
+
+  /*
+   * Escape key.
+   */
+  useEffect(() => {
+    if (!open) return;
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener(
+      'keydown',
+      handleKeyDown
+    );
+
+    return () => {
+      window.removeEventListener(
+        'keydown',
+        handleKeyDown
+      );
+    };
+  }, [open, onClose]);
+
+  /*
+   * Reset copied state when closed.
+   */
+  useEffect(() => {
+    if (!open) {
+      setCopied(false);
+    }
+  }, [open]);
+
+  if (!open) {
+    return null;
+  }
+
+  const handleCopy = async () => {
+    if (!frontendShareLink) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(
+        frontendShareLink
+      );
+
+      setCopied(true);
+
+      setTimeout(() => {
+        setCopied(false);
+      }, 1800);
+    } catch {
+      // Clipboard unavailable.
+    }
+  };
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Room invitation QR code"
+      className="
+        fixed inset-0 z-[60]
+        flex items-center justify-center
+        overflow-y-auto
+        overscroll-contain
+        bg-black/60
+        px-3 py-4
+        backdrop-blur-sm
+        xs:px-4
+        sm:py-6
+      "
+      onClick={onClose}
+    >
+      <div
+        onClick={(event) =>
+          event.stopPropagation()
+        }
+        className="
+          flex
+          w-full
+          max-w-sm
+          min-w-0
+          max-h-[calc(100dvh-2rem)]
+          flex-col
+          overflow-y-auto
+          overscroll-contain
+          rounded-xl
+          border border-white/10
+          bg-[#111827]
+          p-4
+          shadow-2xl
+          xs:rounded-2xl
+          xs:p-5
+          sm:p-6
+        "
+      >
+        {/* Header */}
+
+        <div
+          className="
+            flex
+            shrink-0
+            items-center
+            justify-between
+            gap-3
+          "
+        >
+          <h2
+            className="
+              min-w-0
+              truncate
+              text-sm
+              font-medium
+              text-[#F8FAFC]
+            "
+          >
+            Scan to join
+          </h2>
+
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="
+              flex
+              min-h-10
+              min-w-10
+              shrink-0
+              items-center
+              justify-center
+              rounded-lg
+              text-[#94A3B8]
+              transition-colors
+              hover:bg-white/5
+              hover:text-[#F8FAFC]
+              focus:outline-none
+              focus-visible:ring-2
+              focus-visible:ring-[#00D9FF]
+              touch-manipulation
+            "
+          >
+            <X
+              className="h-5 w-5"
+              aria-hidden="true"
+            />
+          </button>
+        </div>
+
+        {/* QR Code */}
+
+        <div
+          className="
+            mt-5
+            flex
+            justify-center
+          "
+        >
+          <div
+            className="
+              rounded-xl
+              bg-[#F8FAFC]
+              p-3
+            "
+          >
+            <canvas
+              ref={canvasRef}
+              className="
+                block
+                h-auto
+                max-w-full
+              "
+              aria-label="QR code containing the room invitation link"
+            />
+          </div>
+        </div>
+
+        {/* Description */}
+
+        <p
+          className="
+            mt-4
+            text-center
+            text-xs
+            leading-5
+            text-[#94A3B8]
+          "
+        >
+          Only the room link is encoded —
+          no password, no personal data.
+        </p>
+
+        {/* Copy Link */}
+
+        <button
+          type="button"
+          onClick={handleCopy}
+          disabled={!frontendShareLink}
+          className="
+            mt-4
+            flex
+            min-h-11
+            w-full
+            shrink-0
+            items-center
+            justify-center
+            gap-2
+            rounded-lg
+            border border-white/10
+            px-4
+            py-2.5
+            text-sm
+            text-[#F8FAFC]
+            transition-colors
+            hover:border-white/25
+            hover:bg-white/5
+            focus:outline-none
+            focus-visible:ring-2
+            focus-visible:ring-[#00D9FF]
+            disabled:cursor-not-allowed
+            disabled:opacity-50
+            touch-manipulation
+          "
+        >
+          {copied ? (
+            <Check
+              className="
+                h-4 w-4
+                shrink-0
+                text-[#22C55E]
+              "
+              aria-hidden="true"
+            />
+          ) : (
+            <Copy
+              className="
+                h-4 w-4
+                shrink-0
+              "
+              aria-hidden="true"
+            />
+          )}
+
+          <span>
+            {copied
+              ? 'Copied'
+              : 'Copy link'}
+          </span>
+        </button>
+      </div>
+    </div>,
+    document.body
+  );
+}

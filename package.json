@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "react-qr-code": "^2.2.0"
+  }
+}

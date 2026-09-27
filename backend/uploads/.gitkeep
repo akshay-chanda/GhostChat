@@ -1,0 +1,8 @@
+# This directory holds temporary encrypted file uploads at runtime
+# (see backend/.env.example's FILE_STORAGE_PATH). Files written here
+# are random-named ciphertext blobs, auto-deleted when their room
+# expires or is destroyed — nothing here is meant to be committed.
+#
+# This .gitkeep file exists only so the empty directory itself is
+# tracked by git; everything else placed here should stay out of
+# version control (see the root .gitignore).
