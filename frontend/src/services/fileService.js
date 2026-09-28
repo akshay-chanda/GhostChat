@@ -1,6 +1,61 @@
 import { API_BASE_URL } from '../utils/constants';
 import { encryptFile, decryptFile } from '../crypto/fileCrypto';
 
+/**
+ * Convert a backend download URL into an absolute URL.
+ *
+ * Examples:
+ *   /api/rooms/ABC/files/123/download
+ *      -> https://ghostchat-backend-redk.onrender.com/api/rooms/ABC/files/123/download
+ *
+ *   https://ghostchat-backend-redk.onrender.com/api/...
+ *      -> stays unchanged
+ */
+function getAbsoluteDownloadUrl(downloadUrl) {
+  if (!downloadUrl) {
+    throw new Error(
+      'File download URL is missing'
+    );
+  }
+
+  // Already an absolute URL
+  if (
+    downloadUrl.startsWith('http://') ||
+    downloadUrl.startsWith('https://')
+  ) {
+    return downloadUrl;
+  }
+
+  const apiUrl = new URL(API_BASE_URL);
+
+  /*
+   * If the backend gives us:
+   *
+   * /api/rooms/...
+   *
+   * use the backend origin + that complete path.
+   */
+  if (downloadUrl.startsWith('/')) {
+    return `${apiUrl.origin}${downloadUrl}`;
+  }
+
+  /*
+   * If the backend gives us:
+   *
+   * rooms/...
+   *
+   * use the API base URL.
+   */
+  return new URL(
+    downloadUrl,
+    `${API_BASE_URL}/`
+  ).toString();
+}
+
+
+/**
+ * Upload an encrypted file.
+ */
 export function uploadFile({
   roomId,
   file,
@@ -12,20 +67,34 @@ export function uploadFile({
     (async () => {
       try {
         if (!roomId) {
-          throw new Error('Room ID is missing');
+          throw new Error(
+            'Room ID is missing'
+          );
         }
 
         if (!file) {
-          throw new Error('File is missing');
+          throw new Error(
+            'File is missing'
+          );
         }
 
         if (!key) {
-          throw new Error('File encryption key is missing');
+          throw new Error(
+            'File encryption key is missing'
+          );
         }
 
-        const { encryptedBlob, iv } = await encryptFile(file, key);
+        // Encrypt the file before sending it.
+        const {
+          encryptedBlob,
+          iv,
+        } = await encryptFile(
+          file,
+          key
+        );
 
-        const formData = new FormData();
+        const formData =
+          new FormData();
 
         formData.append(
           'file',
@@ -33,12 +102,28 @@ export function uploadFile({
           file.name
         );
 
-        formData.append('iv', iv);
-        formData.append('originalName', file.name);
-        formData.append('mimeType', file.type);
-        formData.append('size', String(file.size));
+        formData.append(
+          'iv',
+          iv
+        );
 
-        const xhr = new XMLHttpRequest();
+        formData.append(
+          'originalName',
+          file.name
+        );
+
+        formData.append(
+          'mimeType',
+          file.type
+        );
+
+        formData.append(
+          'size',
+          String(file.size)
+        );
+
+        const xhr =
+          new XMLHttpRequest();
 
         xhr.open(
           'POST',
@@ -54,13 +139,18 @@ export function uploadFile({
           );
         }
 
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
-            onProgress?.(
-              (event.loaded / event.total) * 100
-            );
-          }
-        };
+        xhr.upload.onprogress =
+          (event) => {
+            if (
+              event.lengthComputable
+            ) {
+              onProgress?.(
+                (event.loaded /
+                  event.total) *
+                  100
+              );
+            }
+          };
 
         xhr.onload = () => {
           if (
@@ -69,37 +159,47 @@ export function uploadFile({
           ) {
             try {
               resolve(
-                JSON.parse(xhr.responseText)
+                JSON.parse(
+                  xhr.responseText
+                )
               );
-            } catch (error) {
+            } catch {
               reject(
                 new Error(
                   'Upload succeeded but the server returned invalid JSON.'
                 )
               );
             }
-          } else {
-            const error = new Error(
+
+            return;
+          }
+
+          const error =
+            new Error(
               `Upload failed (${xhr.status})`
             );
 
-            error.status = xhr.status;
+          error.status =
+            xhr.status;
 
-            try {
-              error.response = JSON.parse(
+          try {
+            error.response =
+              JSON.parse(
                 xhr.responseText
               );
-            } catch {
-              error.response = xhr.responseText;
-            }
-
-            reject(error);
+          } catch {
+            error.response =
+              xhr.responseText;
           }
+
+          reject(error);
         };
 
         xhr.onerror = () => {
           reject(
-            new Error('Upload failed')
+            new Error(
+              'Upload failed'
+            )
           );
         };
 
@@ -111,6 +211,14 @@ export function uploadFile({
   });
 }
 
+
+/**
+ * Download an encrypted file from the backend
+ * and decrypt it using the room encryption key.
+ *
+ * Returns:
+ *   Blob
+ */
 export async function downloadAndDecryptFile({
   downloadUrl,
   iv,
@@ -136,61 +244,104 @@ export async function downloadAndDecryptFile({
     );
   }
 
+  /*
+   * IMPORTANT:
+   *
+   * The backend may return a relative URL.
+   *
+   * Example:
+   * /api/rooms/ABC/files/123/download
+   *
+   * Because the frontend is hosted on Vercel,
+   * fetch(downloadUrl) would otherwise try to
+   * download the file from Vercel.
+   *
+   * We convert it to the Render backend URL.
+   */
+  const absoluteDownloadUrl =
+    getAbsoluteDownloadUrl(
+      downloadUrl
+    );
+
+  console.log(
+    'Downloading encrypted file from:',
+    absoluteDownloadUrl
+  );
+
   const headers = {};
 
   if (sessionId) {
-    headers['X-Session-Id'] = sessionId;
+    headers[
+      'X-Session-Id'
+    ] = sessionId;
   }
 
-  const response = await fetch(
-    downloadUrl,
-    {
-      method: 'GET',
-      credentials: 'include',
-      headers,
-    }
-  );
-
-  if (!response.ok) {
-    const error = new Error(
-      `Download failed (${response.status})`
+  const response =
+    await fetch(
+      absoluteDownloadUrl,
+      {
+        method: 'GET',
+        credentials: 'include',
+        headers,
+      }
     );
 
-    error.status = response.status;
+  if (!response.ok) {
+    const error =
+      new Error(
+        `Download failed (${response.status})`
+      );
+
+    error.status =
+      response.status;
 
     try {
-      error.response = await response
-        .clone()
-        .json();
+      error.response =
+        await response
+          .clone()
+          .json();
     } catch {
-      error.response = await response
-        .clone()
-        .text()
-        .catch(() => '');
+      error.response =
+        await response
+          .clone()
+          .text()
+          .catch(() => '');
     }
 
     throw error;
   }
 
-  // The backend should return the encrypted
-  // ciphertext as raw binary.
+  /*
+   * The backend should return the
+   * encrypted ciphertext as raw binary.
+   */
   const encryptedBlob =
     await response.blob();
 
-  if (!(encryptedBlob instanceof Blob)) {
+  if (
+    !(encryptedBlob instanceof Blob)
+  ) {
     throw new Error(
       'Downloaded file is not a valid Blob'
     );
   }
 
-  if (encryptedBlob.size === 0) {
+  if (
+    encryptedBlob.size === 0
+  ) {
     throw new Error(
       'Downloaded encrypted file is empty'
     );
   }
 
-  // Decrypt the ciphertext using the same
-  // room key and IV that were used during upload.
+  /*
+   * Decrypt using the SAME:
+   *
+   * - room key
+   * - IV
+   *
+   * that were used during upload.
+   */
   const decryptedBlob =
     await decryptFile(
       encryptedBlob,
@@ -199,53 +350,84 @@ export async function downloadAndDecryptFile({
       mimeType
     );
 
-  if (!(decryptedBlob instanceof Blob)) {
+  if (
+    !(decryptedBlob instanceof Blob)
+  ) {
     throw new Error(
       'Decrypted file is not a valid Blob'
     );
   }
 
-  if (decryptedBlob.size === 0) {
+  if (
+    decryptedBlob.size === 0
+  ) {
     throw new Error(
       'Decrypted file is empty'
     );
   }
 
-  // IMPORTANT:
-  // Return the actual Blob.
-  //
-  // Do NOT return:
-  // URL.createObjectURL(decryptedBlob)
-  //
-  // MessageBubble.jsx is responsible for creating
-  // the temporary browser download URL.
+  /*
+   * Return the actual Blob.
+   *
+   * MessageBubble.jsx creates the temporary
+   * object URL and starts the browser download.
+   */
   return decryptedBlob;
 }
 
+
+/**
+ * Delete a file from the backend.
+ */
 export async function deleteFile(
   fileId,
   sessionId
 ) {
-  const response = await fetch(
-    `${API_BASE_URL}/files/${fileId}`,
-    {
-      method: 'DELETE',
-      credentials: 'include',
-      headers: sessionId
-        ? {
-            'X-Session-Id': sessionId,
-          }
-        : undefined,
-    }
-  );
+  if (!fileId) {
+    throw new Error(
+      'File ID is missing'
+    );
+  }
 
-  if (!response.ok) {
-    const error = new Error(
-      `Could not delete file (${response.status})`
+  const response =
+    await fetch(
+      `${API_BASE_URL}/files/${fileId}`,
+      {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: sessionId
+          ? {
+              'X-Session-Id':
+                sessionId,
+            }
+          : undefined,
+      }
     );
 
-    error.status = response.status;
+  if (!response.ok) {
+    const error =
+      new Error(
+        `Could not delete file (${response.status})`
+      );
+
+    error.status =
+      response.status;
+
+    try {
+      error.response =
+        await response
+          .clone()
+          .json();
+    } catch {
+      error.response =
+        await response
+          .clone()
+          .text()
+          .catch(() => '');
+    }
 
     throw error;
   }
+
+  return true;
 }

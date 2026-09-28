@@ -177,7 +177,10 @@ export default function MessageBubble({
         setCopied(false);
       }, 1500);
     } catch (error) {
-      console.error('Copy failed:', error);
+      console.error(
+        'Copy failed:',
+        error
+      );
     }
   };
 
@@ -202,7 +205,9 @@ export default function MessageBubble({
       document.createElement('a');
 
     link.href = downloadObjectUrl;
-    link.download = filename || 'download';
+    link.download =
+      filename || 'download';
+
     link.style.display = 'none';
 
     document.body.appendChild(link);
@@ -222,131 +227,153 @@ export default function MessageBubble({
   // DOWNLOAD FILE
   // --------------------------------------------------
 
-  const handleDownloadFile = async () => {
-    if (downloading) {
-      return;
-    }
+  const handleDownloadFile =
+    async () => {
+      if (downloading) {
+        return;
+      }
 
-    try {
-      setDownloading(true);
+      try {
+        setDownloading(true);
 
-      // ------------------------------------------------
-      // OPTION 1:
-      // FILE ALREADY DECRYPTED LOCALLY
-      // ------------------------------------------------
+        // ------------------------------------------------
+        // OPTION 1:
+        // FILE ALREADY DECRYPTED LOCALLY
+        // ------------------------------------------------
 
-      if (rawFileData) {
-        let downloadBlob = null;
+        if (rawFileData) {
+          let downloadBlob = null;
 
-        if (rawFileData instanceof Blob) {
-          downloadBlob = rawFileData;
-        } else if (
-          rawFileData instanceof ArrayBuffer
-        ) {
-          downloadBlob = new Blob(
-            [rawFileData],
-            {
-              type: fileMimeType,
-            }
-          );
-        } else if (
-          rawFileData instanceof Uint8Array ||
-          ArrayBuffer.isView(rawFileData)
-        ) {
-          downloadBlob = new Blob(
-            [rawFileData],
-            {
-              type: fileMimeType,
-            }
-          );
-        }
-
-        if (downloadBlob) {
           if (
-            downloadBlob.type !==
-            fileMimeType
+            rawFileData instanceof Blob
           ) {
-            downloadBlob = new Blob(
-              [downloadBlob],
-              {
-                type: fileMimeType,
-              }
-            );
+            downloadBlob = rawFileData;
+          } else if (
+            rawFileData instanceof
+            ArrayBuffer
+          ) {
+            downloadBlob =
+              new Blob(
+                [rawFileData],
+                {
+                  type: fileMimeType,
+                }
+              );
+          } else if (
+            rawFileData instanceof
+              Uint8Array ||
+            ArrayBuffer.isView(
+              rawFileData
+            )
+          ) {
+            downloadBlob =
+              new Blob(
+                [rawFileData],
+                {
+                  type: fileMimeType,
+                }
+              );
           }
 
-          triggerBlobDownload(
-            downloadBlob,
-            fileName
-          );
+          if (downloadBlob) {
+            if (
+              downloadBlob.type !==
+              fileMimeType
+            ) {
+              downloadBlob =
+                new Blob(
+                  [downloadBlob],
+                  {
+                    type: fileMimeType,
+                  }
+                );
+            }
 
-          return;
+            triggerBlobDownload(
+              downloadBlob,
+              fileName
+            );
+
+            return;
+          }
+
+          console.warn(
+            'Local file data exists but could not be converted:',
+            rawFileData
+          );
         }
 
-        console.warn(
-          'Local file data exists but could not be converted:',
-          rawFileData
+        // ------------------------------------------------
+        // OPTION 2:
+        // DOWNLOAD + DECRYPT
+        // ------------------------------------------------
+
+        if (!downloadUrl) {
+          throw new Error(
+            'File download URL is missing'
+          );
+        }
+
+        if (!fileIv) {
+          throw new Error(
+            'File IV is missing'
+          );
+        }
+
+        if (!roomKey) {
+          throw new Error(
+            'Room encryption key is missing'
+          );
+        }
+
+        console.log(
+          'Starting file download:',
+          {
+            fileName,
+            downloadUrl,
+          }
         );
-      }
 
-      // ------------------------------------------------
-      // OPTION 2:
-      // DOWNLOAD + DECRYPT
-      // ------------------------------------------------
+        const decryptedBlob =
+          await downloadAndDecryptFile({
+            downloadUrl,
+            iv: fileIv,
+            mimeType: fileMimeType,
+            key: roomKey,
+            sessionId,
+          });
 
-      if (!downloadUrl) {
+        if (
+          !(decryptedBlob instanceof Blob)
+        ) {
+          throw new Error(
+            'Decrypted file is not a valid Blob'
+          );
+        }
+
+        if (
+          decryptedBlob.size === 0
+        ) {
+          throw new Error(
+            'Decrypted file is empty'
+          );
+        }
+
+        // Create a temporary browser URL
+        // and download the decrypted file.
+        triggerBlobDownload(
+          decryptedBlob,
+          fileName
+        );
+      } catch (error) {
         console.error(
-          'File download URL is missing:',
-          message
+          'File download failed:',
+          error
         );
-
-        return;
+      } finally {
+        setDownloading(false);
       }
-
-      if (!fileIv) {
-        console.error(
-          'File IV is missing:',
-          message
-        );
-
-        return;
-      }
-
-      if (!roomKey) {
-        console.error(
-          'Room encryption key is missing'
-        );
-
-        return;
-      }
-
-      const decryptedBlob =
-        await downloadAndDecryptFile({
-          downloadUrl,
-          iv: fileIv,
-          mimeType: fileMimeType,
-          key: roomKey,
-          sessionId,
-        });
-
-      if (!(decryptedBlob instanceof Blob)) {
-        throw new Error(
-          'Decrypted file is not a valid Blob'
-        );
-      }
-
-      triggerBlobDownload(
-        decryptedBlob,
-        fileName
-      );
-    } catch (error) {
-      console.error(
-        'File download failed:',
-        error
-      );
-    } finally {
-      setDownloading(false);
-    }
-  };
+    };
 
   // --------------------------------------------------
   // DELETE
@@ -442,10 +469,6 @@ export default function MessageBubble({
             items-end
           "
         >
-          {/* ---------------------------------------- */}
-          {/* MESSAGE CONTENT                          */}
-          {/* ---------------------------------------- */}
-
           <div
             className="
               flex
@@ -456,10 +479,6 @@ export default function MessageBubble({
               items-start
             "
           >
-            {/* -------------------------------------- */}
-            {/* SENDER NAME                            */}
-            {/* -------------------------------------- */}
-
             {!grouped && (
               <span
                 className="
@@ -482,10 +501,6 @@ export default function MessageBubble({
               </span>
             )}
 
-            {/* -------------------------------------- */}
-            {/* RECEIVER BUBBLE + ACTIONS              */}
-            {/* -------------------------------------- */}
-
             <div
               className="
                 flex
@@ -495,10 +510,6 @@ export default function MessageBubble({
                 items-end
               "
             >
-              {/* ------------------------------------ */}
-              {/* BUBBLE                               */}
-              {/* ------------------------------------ */}
-
               <div
                 className="
                   w-fit
@@ -518,9 +529,7 @@ export default function MessageBubble({
                   md:max-w-[calc(100vw-10rem)]
                 "
               >
-                {/* ---------------------------------- */}
-                {/* REPLY PREVIEW                       */}
-                {/* ---------------------------------- */}
+                {/* REPLY PREVIEW */}
 
                 {replyPreview && (
                   <div
@@ -547,12 +556,11 @@ export default function MessageBubble({
                         text-[#00D9FF]
                         sm:text-[11px]
                       "
-                      title={`Replying to ${
-                        replyPreview.senderName
-                      }`}
                     >
                       Replying to{' '}
-                      {replyPreview.senderName}
+                      {
+                        replyPreview.senderName
+                      }
                     </p>
 
                     <p
@@ -565,18 +573,15 @@ export default function MessageBubble({
                         text-[#CBD5E1]
                         sm:text-xs
                       "
-                      title={
+                    >
+                      {
                         replyPreview.content
                       }
-                    >
-                      {replyPreview.content}
                     </p>
                   </div>
                 )}
 
-                {/* ---------------------------------- */}
-                {/* TEXT                                */}
-                {/* ---------------------------------- */}
+                {/* TEXT */}
 
                 {content && (
                   <p
@@ -594,9 +599,7 @@ export default function MessageBubble({
                   </p>
                 )}
 
-                {/* ---------------------------------- */}
-                {/* FILE                                */}
-                {/* ---------------------------------- */}
+                {/* FILE */}
 
                 {isFileMessage && (
                   <button
@@ -709,9 +712,7 @@ export default function MessageBubble({
                 )}
               </div>
 
-              {/* ------------------------------------ */}
-              {/* RECEIVER REPLY + COPY                */}
-              {/* ------------------------------------ */}
+              {/* RECEIVER ACTIONS */}
 
               <div
                 className="
@@ -776,9 +777,7 @@ export default function MessageBubble({
               </div>
             </div>
 
-            {/* -------------------------------------- */}
-            {/* TIMESTAMP                               */}
-            {/* -------------------------------------- */}
+            {/* TIMESTAMP */}
 
             <span
               className="
@@ -811,9 +810,7 @@ export default function MessageBubble({
             flex-row-reverse
           "
         >
-          {/* ---------------------------------------- */}
-          {/* EMPTY RECEIVER ACTION SPACE              */}
-          {/* ---------------------------------------- */}
+          {/* EMPTY ACTION SPACE */}
 
           <div
             className="
@@ -833,9 +830,7 @@ export default function MessageBubble({
             "
           />
 
-          {/* ---------------------------------------- */}
-          {/* MESSAGE CONTENT                          */}
-          {/* ---------------------------------------- */}
+          {/* MESSAGE CONTENT */}
 
           <div
             className="
@@ -850,32 +845,6 @@ export default function MessageBubble({
               lg:max-w-[65%]
             "
           >
-            {/* -------------------------------------- */}
-            {/* SENDER NAME                            */}
-            {/* -------------------------------------- */}
-
-            {!grouped && false && (
-              <span
-                className="
-                  mb-1
-                  max-w-full
-                  truncate
-                  px-1
-                  text-[11px]
-                  leading-tight
-                  text-[#94A3B8]
-                  sm:text-xs
-                "
-              >
-                {senderName ||
-                  'Anonymous User'}
-              </span>
-            )}
-
-            {/* -------------------------------------- */}
-            {/* BUBBLE                                 */}
-            {/* -------------------------------------- */}
-
             <div
               className="
                 min-w-0
@@ -891,9 +860,7 @@ export default function MessageBubble({
                 sm:py-2.5
               "
             >
-              {/* ------------------------------------ */}
-              {/* REPLY PREVIEW                         */}
-              {/* ------------------------------------ */}
+              {/* REPLY PREVIEW */}
 
               {replyPreview && (
                 <div
@@ -922,7 +889,9 @@ export default function MessageBubble({
                     "
                   >
                     Replying to{' '}
-                    {replyPreview.senderName}
+                    {
+                      replyPreview.senderName
+                    }
                   </p>
 
                   <p
@@ -936,14 +905,14 @@ export default function MessageBubble({
                       sm:text-xs
                     "
                   >
-                    {replyPreview.content}
+                    {
+                      replyPreview.content
+                    }
                   </p>
                 </div>
               )}
 
-              {/* ------------------------------------ */}
-              {/* TEXT                                  */}
-              {/* ------------------------------------ */}
+              {/* TEXT */}
 
               {content && (
                 <p
@@ -961,9 +930,7 @@ export default function MessageBubble({
                 </p>
               )}
 
-              {/* ------------------------------------ */}
-              {/* FILE                                  */}
-              {/* ------------------------------------ */}
+              {/* FILE */}
 
               {isFileMessage && (
                 <button
@@ -1076,9 +1043,7 @@ export default function MessageBubble({
               )}
             </div>
 
-            {/* -------------------------------------- */}
-            {/* TIMESTAMP                               */}
-            {/* -------------------------------------- */}
+            {/* TIMESTAMP */}
 
             <span
               className="
@@ -1095,9 +1060,7 @@ export default function MessageBubble({
             </span>
           </div>
 
-          {/* ---------------------------------------- */}
-          {/* SENDER ACTIONS                           */}
-          {/* ---------------------------------------- */}
+          {/* SENDER ACTIONS */}
 
           <div
             className="
