@@ -14,63 +14,46 @@ export default function QRModal({
   const [copied, setCopied] = useState(false);
 
   /*
-   * IMPORTANT:
+   * ALWAYS create the public invitation URL from the
+   * current frontend origin.
    *
-   * Use the exact invitation link passed from RoomCreatedCard.
-   *
-   * That means:
-   * QR code
-   * Copy Link
-   * Share Link
-   *
-   * all use the SAME URL.
+   * We intentionally DO NOT use the backend shareLink.
    *
    * Example:
+   *
    * https://ghost-chat-akshay.vercel.app/join?room=ABC123&password=hello123
    */
-
   const frontendShareLink = useMemo(() => {
-    /*
-     * If RoomCreatedCard gives us the already-generated
-     * frontend invitation link, use it exactly as-is.
-     */
-    if (shareLink) {
-      return shareLink;
-    }
-
-    /*
-     * Fallback:
-     * Build the invitation link if no shareLink was provided.
-     */
     if (
-      typeof window !== 'undefined' &&
-      roomId
+      typeof window === 'undefined' ||
+      !roomId
     ) {
-      const params = new URLSearchParams();
-
-      params.set(
-        'room',
-        roomId.trim().toUpperCase()
-      );
-
-      if (
-        password !== undefined &&
-        password !== null
-      ) {
-        params.set('password', password);
-      }
-
-      return (
-        `${window.location.origin}` +
-        `/join?${params.toString()}`
-      );
+      return '';
     }
 
-    return '';
-  }, [shareLink, roomId, password]);
+    const params = new URLSearchParams();
+
+    params.set(
+      'room',
+      roomId.trim().toUpperCase()
+    );
+
+    if (
+      password !== undefined &&
+      password !== null
+    ) {
+      params.set('password', password);
+    }
+
+    return (
+      `${window.location.origin}` +
+      `/join?${params.toString()}`
+    );
+  }, [roomId, password]);
 
   /*
-   * Generate QR code.
+   * Generate QR code using the EXACT same
+   * frontend invitation URL.
    */
   useEffect(() => {
     if (
@@ -82,7 +65,6 @@ export default function QRModal({
     }
 
     const canvas = canvasRef.current;
-
     const context = canvas.getContext('2d');
 
     if (context) {
@@ -154,7 +136,8 @@ export default function QRModal({
   }, [open]);
 
   /*
-   * Copy the EXACT same URL used by QR code.
+   * Copy the EXACT same URL contained
+   * inside the QR code.
    */
   const handleCopy = async () => {
     if (!frontendShareLink) {

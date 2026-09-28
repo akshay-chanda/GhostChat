@@ -58,25 +58,28 @@ export default function RoomCreatedCard({
    */
   const frontendShareLink = useMemo(() => {
     if (
-      typeof window !== 'undefined' &&
-      roomId
+      typeof window === 'undefined' ||
+      !roomId
     ) {
-      const params = new URLSearchParams();
-
-      params.set('room', roomId);
-
-      if (password) {
-        params.set('password', password);
-      }
-
-      return `${window.location.origin}/join?${params.toString()}`;
+      return '';
     }
 
-    /*
-     * Defensive fallback.
-     */
-    return shareLink || '';
-  }, [roomId, password, shareLink]);
+    const params = new URLSearchParams();
+
+    params.set(
+      'room',
+      roomId.trim().toUpperCase()
+    );
+
+    if (
+      password !== undefined &&
+      password !== null
+    ) {
+      params.set('password', password);
+    }
+
+    return `${window.location.origin}/join?${params.toString()}`;
+  }, [roomId, password]);
 
   /*
    * Copy text to clipboard.
