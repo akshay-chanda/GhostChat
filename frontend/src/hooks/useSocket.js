@@ -16,15 +16,14 @@ import {
 /**
  * Manages the Socket.IO connection lifecycle for a room.
  *
- * Mobile browsers can temporarily suspend the page while the user:
- * - chooses a file
- * - opens a downloaded file
- * - switches applications
- * - changes network connection
+ * Mobile browsers can temporarily disconnect while:
+ * - opening a file picker
+ * - selecting a file
+ * - opening a file viewer
+ * - switching applications
+ * - temporarily losing network connectivity
  *
- * Temporary connection problems must NOT send the user Home.
- *
- * Only explicit server-side room/session rejection should do that.
+ * A temporary socket failure must NOT close the room.
  */
 export function useSocket({
   roomId,
@@ -33,175 +32,218 @@ export function useSocket({
 }) {
   const navigate = useNavigate();
 
-  const connectedRef = useRef(false);
-  const redirectingRef = useRef(false);
-  const socketRef = useRef(null);
+  const connectedRef =
+    useRef(false);
 
-  const redirectToHome = useCallback(() => {
-    if (redirectingRef.current) {
-      return;
-    }
+  const redirectingRef =
+    useRef(false);
 
-    redirectingRef.current = true;
-    connectedRef.current = false;
+  const socketRef =
+    useRef(null);
 
-    disconnectSocket();
+  const redirectToHome =
+    useCallback(() => {
+      if (
+        redirectingRef.current
+      ) {
+        return;
+      }
 
-    navigate('/', {
-      replace: true,
-    });
-  }, [navigate]);
+      redirectingRef.current = true;
+
+      connectedRef.current =
+        false;
+
+      disconnectSocket();
+
+      navigate('/', {
+        replace: true,
+      });
+    }, [navigate]);
 
   useEffect(() => {
-    if (!roomId || !sessionId || !roomKey) {
+    if (
+      !roomId ||
+      !sessionId ||
+      !roomKey
+    ) {
       return undefined;
     }
 
-    redirectingRef.current = false;
+    redirectingRef.current =
+      false;
 
-    const socket = connectSocket({
-      roomId,
-      sessionId,
-      key: roomKey,
-    });
+    const socket =
+      connectSocket({
+        roomId,
+        sessionId,
+        key: roomKey,
+      });
 
-    socketRef.current = socket;
+    socketRef.current =
+      socket;
 
-    const handleConnect = () => {
-      console.log(
-        '[useSocket] Connected:',
-        socket.id
-      );
+    const handleConnect =
+      () => {
+        console.log(
+          '[useSocket] Connected:',
+          socket.id
+        );
 
-      connectedRef.current = true;
-    };
-
-    const handleConnectError = (error) => {
-      console.error(
-        '[useSocket] Connection error:',
-        error?.message || error
-      );
-
-      /*
-       * IMPORTANT:
-       *
-       * Do NOT redirect here.
-       *
-       * Socket.IO may be temporarily unable to connect because
-       * the mobile browser was backgrounded by a file picker/viewer.
-       *
-       * Automatic reconnection will handle temporary failures.
-       */
-      connectedRef.current = false;
-    };
-
-    const handleRoomExpired = () => {
-      console.log(
-        '[useSocket] Room expired'
-      );
-
-      redirectToHome();
-    };
-
-    const handleRoomRemoved = () => {
-      console.log(
-        '[useSocket] Removed from room'
-      );
-
-      redirectToHome();
-    };
-
-    const handleConnectionError = (payload) => {
-      console.error(
-        '[useSocket] Server error:',
-        payload?.message || payload
-      );
-
-      const message = String(
-        payload?.message || ''
-      ).toLowerCase();
-
-      /*
-       * Only explicit session/room rejection should cause
-       * the user to leave the room.
-       *
-       * Generic connection failures are handled by Socket.IO.
-       */
-      const sessionOrRoomError =
-        message.includes('session') ||
-        message.includes('room') ||
-        message.includes('expired') ||
-        message.includes('destroyed') ||
-        message.includes('not found') ||
-        message.includes('unauthorized') ||
-        message.includes('invalid');
-
-      if (sessionOrRoomError) {
-        redirectToHome();
-      }
-    };
-
-    const handleDisconnect = (reason) => {
-      console.log(
-        '[useSocket] Disconnected:',
-        reason
-      );
-
-      connectedRef.current = false;
-    };
+        connectedRef.current =
+          true;
+      };
 
     /*
-     * Mobile browser lifecycle:
+     * IMPORTANT:
      *
-     * When returning from a file picker/viewer, explicitly ask
-     * Socket.IO to reconnect if necessary.
+     * A connect_error does NOT mean the room is gone.
+     *
+     * Mobile browsers can generate temporary connection
+     * failures while the user is using a file picker/viewer.
+     *
+     * Socket.IO will automatically retry.
      */
-    const handleVisibilityChange = () => {
-      if (
-        document.visibilityState === 'visible'
-      ) {
+    const handleConnectError =
+      (error) => {
+        console.error(
+          '[useSocket] Connection error:',
+          error?.message ||
+            error
+        );
+
+        connectedRef.current =
+          false;
+      };
+
+    /*
+     * These are explicit server events saying that the
+     * room is no longer available.
+     */
+    const handleRoomExpired =
+      () => {
         console.log(
-          '[useSocket] Page became visible'
+          '[useSocket] Room expired'
+        );
+
+        redirectToHome();
+      };
+
+    const handleRoomRemoved =
+      () => {
+        console.log(
+          '[useSocket] Removed from room'
+        );
+
+        redirectToHome();
+      };
+
+    /*
+     * Only explicit authentication/session rejection
+     * should cause us to leave the room.
+     *
+     * Do NOT treat every temporary connection error
+     * as a session failure.
+     */
+    const handleConnectionError =
+      (payload) => {
+        console.error(
+          '[useSocket] Server connection error:',
+          payload?.message ||
+            payload
+        );
+
+        const message =
+          String(
+            payload?.message ||
+              ''
+          ).toLowerCase();
+
+        const invalidSession =
+          message.includes(
+            'invalid or expired session'
+          ) ||
+          message.includes(
+            'missing room or session credentials'
+          );
+
+        if (
+          invalidSession
+        ) {
+          redirectToHome();
+        }
+      };
+
+    const handleDisconnect =
+      (reason) => {
+        console.log(
+          '[useSocket] Disconnected:',
+          reason
+        );
+
+        connectedRef.current =
+          false;
+      };
+
+    /*
+     * Android/iOS:
+     *
+     * The browser may become hidden while the user
+     * selects or views a file.
+     *
+     * When it becomes visible again, explicitly ask
+     * the existing socket to reconnect.
+     */
+    const handleVisibilityChange =
+      () => {
+        if (
+          document.visibilityState ===
+          'visible'
+        ) {
+          console.log(
+            '[useSocket] Page became visible'
+          );
+
+          reconnectSocket();
+        }
+      };
+
+    /*
+     * iOS Safari can restore pages through BFCache.
+     */
+    const handlePageShow =
+      () => {
+        console.log(
+          '[useSocket] Page shown'
         );
 
         reconnectSocket();
-      }
-    };
+      };
 
     /*
-     * iOS Safari can restore a page through BFCache.
-     * pageshow is important in that situation.
+     * Useful when returning from another application
+     * or a native file picker.
      */
-    const handlePageShow = () => {
-      console.log(
-        '[useSocket] pageshow'
-      );
+    const handleFocus =
+      () => {
+        console.log(
+          '[useSocket] Window focused'
+        );
 
-      reconnectSocket();
-    };
+        reconnectSocket();
+      };
 
     /*
-     * Returning focus is another useful recovery signal,
-     * especially after Android file pickers.
+     * Network connection came back.
      */
-    const handleFocus = () => {
-      console.log(
-        '[useSocket] Window focused'
-      );
+    const handleOnline =
+      () => {
+        console.log(
+          '[useSocket] Browser online'
+        );
 
-      reconnectSocket();
-    };
-
-    /*
-     * Network became available again.
-     */
-    const handleOnline = () => {
-      console.log(
-        '[useSocket] Browser is online'
-      );
-
-      reconnectSocket();
-    };
+        reconnectSocket();
+      };
 
     socket.on(
       'connect',
@@ -254,10 +296,12 @@ export function useSocket({
     );
 
     /*
-     * Handle an already-connected socket.
+     * The socket may already be connected by the time
+     * our listeners are attached.
      */
     if (socket.connected) {
-      connectedRef.current = true;
+      connectedRef.current =
+        true;
     }
 
     return () => {
@@ -311,15 +355,20 @@ export function useSocket({
         handleOnline
       );
 
-      connectedRef.current = false;
+      connectedRef.current =
+        false;
 
       /*
-       * Disconnect only the socket owned by this hook.
+       * Only disconnect the socket that belongs
+       * to this hook.
        */
       if (
-        socketRef.current === socket
+        socketRef.current ===
+        socket
       ) {
-        socketRef.current = null;
+        socketRef.current =
+          null;
+
         disconnectSocket();
       }
     };
@@ -330,26 +379,24 @@ export function useSocket({
     redirectToHome,
   ]);
 
-  const send = useCallback(
-    (plaintext, replyTo) => {
-      if (!connectedRef.current) {
-        /*
-         * Socket.IO may currently be reconnecting.
-         * sendMessage() itself waits for connection, but this
-         * guard would prevent it from getting there.
-         */
-        throw new Error(
-          'Socket is reconnecting'
-        );
-      }
-
-      return sendEncryptedMessage(
+  const send =
+    useCallback(
+      async (
         plaintext,
         replyTo
-      );
-    },
-    []
-  );
+      ) => {
+        /*
+         * sendMessage() has its own wait-for-connection
+         * logic, so don't reject merely because the socket
+         * is currently reconnecting.
+         */
+        return sendEncryptedMessage(
+          plaintext,
+          replyTo
+        );
+      },
+      []
+    );
 
   return {
     send,
