@@ -11,26 +11,37 @@ export default function QRModal({
   password,
 }) {
   const canvasRef = useRef(null);
-
   const [copied, setCopied] = useState(false);
 
   /*
-   * Create the invitation link used by:
+   * IMPORTANT:
    *
-   * 1. QR code
-   * 2. Copy link
-   * 3. Share link
+   * Use the exact invitation link passed from RoomCreatedCard.
+   *
+   * That means:
+   * QR code
+   * Copy Link
+   * Share Link
+   *
+   * all use the SAME URL.
    *
    * Example:
-   *
    * https://ghost-chat-akshay.vercel.app/join?room=ABC123&password=hello123
-   *
-   * JoinRoomForm reads these two query parameters:
-   *
-   * room
-   * password
    */
+
   const frontendShareLink = useMemo(() => {
+    /*
+     * If RoomCreatedCard gives us the already-generated
+     * frontend invitation link, use it exactly as-is.
+     */
+    if (shareLink) {
+      return shareLink;
+    }
+
+    /*
+     * Fallback:
+     * Build the invitation link if no shareLink was provided.
+     */
     if (
       typeof window !== 'undefined' &&
       roomId
@@ -42,13 +53,10 @@ export default function QRModal({
         roomId.trim().toUpperCase()
       );
 
-      /*
-       * Include the password in the invitation URL.
-       *
-       * This allows JoinRoomForm to automatically
-       * fill the password field.
-       */
-      if (password !== undefined && password !== null) {
+      if (
+        password !== undefined &&
+        password !== null
+      ) {
         params.set('password', password);
       }
 
@@ -58,32 +66,8 @@ export default function QRModal({
       );
     }
 
-    /*
-     * Fallback.
-     *
-     * If roomId is unavailable, use the supplied
-     * shareLink.
-     */
-    if (shareLink) {
-      try {
-        const url = new URL(shareLink);
-
-        /*
-         * Keep the current frontend domain.
-         */
-        return (
-          `${window.location.origin}` +
-          `${url.pathname}` +
-          `${url.search}` +
-          `${url.hash}`
-        );
-      } catch {
-        return shareLink;
-      }
-    }
-
     return '';
-  }, [roomId, password, shareLink]);
+  }, [shareLink, roomId, password]);
 
   /*
    * Generate QR code.
@@ -99,9 +83,6 @@ export default function QRModal({
 
     const canvas = canvasRef.current;
 
-    /*
-     * Clear any previous QR code.
-     */
     const context = canvas.getContext('2d');
 
     if (context) {
@@ -137,7 +118,7 @@ export default function QRModal({
   }, [open, frontendShareLink]);
 
   /*
-   * Escape key closes the modal.
+   * Escape key closes modal.
    */
   useEffect(() => {
     if (!open) {
@@ -164,7 +145,7 @@ export default function QRModal({
   }, [open, onClose]);
 
   /*
-   * Reset copied state whenever modal closes.
+   * Reset copied state when modal closes.
    */
   useEffect(() => {
     if (!open) {
@@ -173,8 +154,7 @@ export default function QRModal({
   }, [open]);
 
   /*
-   * Copy the exact same invitation URL
-   * that is inside the QR code.
+   * Copy the EXACT same URL used by QR code.
    */
   const handleCopy = async () => {
     if (!frontendShareLink) {
@@ -182,9 +162,6 @@ export default function QRModal({
     }
 
     try {
-      /*
-       * Modern browsers.
-       */
       if (
         navigator.clipboard &&
         window.isSecureContext
@@ -193,9 +170,6 @@ export default function QRModal({
           frontendShareLink
         );
       } else {
-        /*
-         * Fallback for older browsers.
-         */
         const textarea =
           document.createElement('textarea');
 
@@ -235,9 +209,6 @@ export default function QRModal({
     }
   };
 
-  /*
-   * Do not render anything when closed.
-   */
   if (!open) {
     return null;
   }
@@ -400,7 +371,7 @@ export default function QRModal({
           fill the Room ID and password.
         </p>
 
-        {/* Room ID preview */}
+        {/* Room ID */}
 
         {roomId && (
           <div
@@ -413,12 +384,7 @@ export default function QRModal({
               py-2.5
             "
           >
-            <p
-              className="
-                text-xs
-                text-[#94A3B8]
-              "
-            >
+            <p className="text-xs text-[#94A3B8]">
               Room ID
             </p>
 
@@ -437,7 +403,7 @@ export default function QRModal({
           </div>
         )}
 
-        {/* Invitation link preview */}
+        {/* Invitation link */}
 
         {frontendShareLink && (
           <div
@@ -450,12 +416,7 @@ export default function QRModal({
               py-2.5
             "
           >
-            <p
-              className="
-                text-xs
-                text-[#94A3B8]
-              "
-            >
+            <p className="text-xs text-[#94A3B8]">
               Invitation link
             </p>
 
