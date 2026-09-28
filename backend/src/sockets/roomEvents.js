@@ -1,447 +1,795 @@
-const roomManager = require('../services/roomManager');
-const sessionManager = require('../services/sessionManager');
-const store = require('../storage/memoryStore');
+import {
+  getRoom,
+  destroyRoom,
+  updateRoom,
+  removeParticipant,
+} from '../services/roomManager.js';
 
-const {
-  createSystemMessage,
-} = require('../models/Message');
+import {
+  destroySession,
+  getSession,
+} from '../services/sessionManager.js';
 
-const logger = require('../utils/logger');
 
-/**
- * Send an error to a socket
- */
-function emitError(socket, message) {
-  socket.emit('connection:error', {
-    message,
-  });
+// ============================================================
+// HELPERS
+// ============================================================
+
+function getRoomId(socket) {
+  return socket.handshake.auth?.roomId;
 }
 
+function getSessionId(socket) {
+  return socket.handshake.auth?.sessionId;
+}
+
+function getSocketRoom(roomId) {
+  return `room:${roomId}`;
+}
+
+
 /**
- * Mark every socket belonging to a room as already destroyed.
+ * Find another active socket belonging to the same
+ * room/session.
  *
- * This prevents duplicate cleanup when the owner explicitly
- * destroys the room and Socket.IO disconnects all other users.
- */
-function markRoomAsDestroyed(io, roomId) {
-  for (const clientSocket of io.sockets.sockets.values()) {
-    if (clientSocket.data.roomId === roomId) {
-      clientSocket.data.roomAlreadyDestroyed = true;
-    }
-  }
-}
-
-/**
- * Find a socket by room ID and session ID
+ * This is useful when a browser temporarily reconnects
+ * or when the same session has more than one socket.
  */
 function findParticipantSocket(io, roomId, sessionId) {
-  return [...io.sockets.sockets.values()].find(
-    (clientSocket) =>
-      clientSocket.data.roomId === roomId &&
-      clientSocket.data.sessionId === sessionId
-  );
+  const roomName = getSocketRoom(roomId);
+  const sockets = io.sockets.adapter.rooms.get(roomName);
+
+  if (!sockets) {
+    return null;
+  }
+
+  for (const socketId of sockets) {
+    const connectedSocket = io.sockets.sockets.get(socketId);
+
+    if (!connectedSocket) {
+      continue;
+    }
+
+    const connectedRoomId =
+      connectedSocket.handshake.auth?.roomId;
+
+    const connectedSessionId =
+      connectedSocket.handshake.auth?.sessionId;
+
+    if (
+      connectedRoomId === roomId &&
+      connectedSessionId === sessionId
+    ) {
+      return connectedSocket;
+    }
+  }
+
+  return null;
 }
 
-/**
- * Register room-related socket events
- */
-function registerRoomEvents(io, socket) {
-  const {
-    roomId,
-    sessionId,
-  } = socket.data;
 
-  /**
-   * Lock room
-   */
-  socket.on('room:lock', () => {
+// ============================================================
+// REGISTER ROOM EVENTS
+// ============================================================
+
+export function registerRoomEvents(io, socket) {
+  const roomId = getRoomId(socket);
+  const sessionId = getSessionId(socket);
+
+  if (!roomId || !sessionId) {
+    console.warn(
+      '[roomEvents] Missing room/session information'
+    );
+
+    return;
+  }
+
+  console.log(
+    `[roomEvents] Registering events for room=${roomId} session=${sessionId}`
+  );
+
+
+  // ==========================================================
+  // MESSAGE: SEND
+  // ==========================================================
+
+  socket.on('message:send', (payload) => {
     try {
-      roomManager.setLocked(
-        roomId,
-        sessionId,
-        true
-      );
+      const room = getRoom(roomId);
 
-      io.to(roomId).emit(
-        'room:updated',
-        roomManager.getPublicRoomInfo(roomId)
-      );
-    } catch (error) {
-      emitError(socket, error.message);
-    }
-  });
+      if (!room) {
+        socket.emit('connection:error', {
+          message: 'Room is no longer available.',
+        });
 
-  /**
-   * Unlock room
-   */
-  socket.on('room:unlock', () => {
-    try {
-      roomManager.setLocked(
-        roomId,
-        sessionId,
-        false
-      );
-
-      io.to(roomId).emit(
-        'room:updated',
-        roomManager.getPublicRoomInfo(roomId)
-      );
-    } catch (error) {
-      emitError(socket, error.message);
-    }
-  });
-
-  /**
-   * Enable or disable new members
-   */
-  socket.on(
-    'room:set-accepting-members',
-    ({ accepting } = {}) => {
-      try {
-        roomManager.setAcceptingNewMembers(
-          roomId,
-          sessionId,
-          Boolean(accepting)
-        );
-
-        io.to(roomId).emit(
-          'room:updated',
-          roomManager.getPublicRoomInfo(roomId)
-        );
-      } catch (error) {
-        emitError(socket, error.message);
-      }
-    }
-  );
-
-  /**
-   * Enable or disable file sharing
-   */
-  socket.on(
-    'room:set-file-sharing',
-    ({ enabled } = {}) => {
-      try {
-        roomManager.setFileSharingEnabled(
-          roomId,
-          sessionId,
-          Boolean(enabled)
-        );
-
-        io.to(roomId).emit(
-          'room:updated',
-          roomManager.getPublicRoomInfo(roomId)
-        );
-      } catch (error) {
-        emitError(socket, error.message);
-      }
-    }
-  );
-
-  /**
-   * Change maximum participants
-   */
-  socket.on(
-    'room:set-max-participants',
-    ({ maxParticipants } = {}) => {
-      try {
-        roomManager.setMaxParticipants(
-          roomId,
-          sessionId,
-          Number(maxParticipants)
-        );
-
-        io.to(roomId).emit(
-          'room:updated',
-          roomManager.getPublicRoomInfo(roomId)
-        );
-      } catch (error) {
-        emitError(socket, error.message);
-      }
-    }
-  );
-
-  /**
-   * Extend room expiration
-   */
-  socket.on(
-    'room:extend-expiration',
-    ({ additionalSeconds } = {}) => {
-      try {
-        roomManager.extendExpiration(
-          roomId,
-          sessionId,
-          Number(additionalSeconds)
-        );
-
-        io.to(roomId).emit(
-          'room:updated',
-          roomManager.getPublicRoomInfo(roomId)
-        );
-      } catch (error) {
-        emitError(socket, error.message);
-      }
-    }
-  );
-
-  /**
-   * Remove a participant
-   *
-   * This is an EXPLICIT owner action.
-   */
-  socket.on(
-    'room:remove-participant',
-    ({ sessionId: targetSessionId } = {}) => {
-      try {
-        if (!targetSessionId) {
-          throw new Error(
-            'Target participant session is required.'
-          );
-        }
-
-        const target = sessionManager.validateSession(
-          roomId,
-          targetSessionId
-        );
-
-        roomManager.removeParticipant(
-          roomId,
-          sessionId,
-          targetSessionId
-        );
-
-        io.to(roomId).emit(
-          'room:user-left',
-          {
-            id: targetSessionId,
-          }
-        );
-
-        if (target) {
-          const removedNotice = createSystemMessage(
-            `${target.anonymousName} was removed from the room.`
-          );
-
-          store.addMessage(
-            roomId,
-            removedNotice
-          );
-
-          io.to(roomId).emit(
-            'message:new',
-            removedNotice
-          );
-        }
-
-        const targetSocket = findParticipantSocket(
-          io,
-          roomId,
-          targetSessionId
-        );
-
-        if (targetSocket) {
-          /*
-           * This is a real removal, not a temporary
-           * mobile/browser disconnect.
-           */
-          targetSocket.data.suppressLeaveEvent = true;
-
-          targetSocket.emit('room:removed');
-
-          targetSocket.disconnect(true);
-        }
-      } catch (error) {
-        emitError(socket, error.message);
-      }
-    }
-  );
-
-  /**
-   * Explicitly destroy room
-   *
-   * This is the ONLY normal socket action that
-   * destroys the entire room.
-   */
-  socket.on('room:destroy', () => {
-    try {
-      roomManager.destroyRoom(
-        roomId,
-        sessionId
-      );
-
-      markRoomAsDestroyed(
-        io,
-        roomId
-      );
-
-      io.to(roomId).emit(
-        'room:expired'
-      );
-
-      io.in(roomId).disconnectSockets(true);
-
-      logger.info(
-        'Room explicitly destroyed',
-        {
-          roomId,
-          sessionId,
-        }
-      );
-    } catch (error) {
-      emitError(socket, error.message);
-    }
-  });
-
-  /**
-   * Explicit leave room
-   *
-   * IMPORTANT:
-   *
-   * We use a separate event for an intentional leave.
-   *
-   * A normal WebSocket disconnect is NOT treated as
-   * leaving the room because mobile browsers can
-   * temporarily disconnect when opening file viewers,
-   * file pickers, other applications, etc.
-   */
-  socket.on('room:leave', () => {
-    try {
-      if (socket.data.intentionalLeave) {
         return;
       }
 
-      socket.data.intentionalLeave = true;
+      const session = getSession(sessionId);
 
-      /*
-       * Owner explicitly leaving:
-       *
-       * Keep the existing GhostChat behavior where the
-       * owner's intentional leave destroys the room.
-       */
-      if (socket.data.isOwner) {
-        roomManager.destroyRoom(
+      if (!session) {
+        socket.emit('connection:error', {
+          message: 'Your session is no longer valid.',
+        });
+
+        return;
+      }
+
+      if (!payload || typeof payload !== 'object') {
+        return;
+      }
+
+      const message = {
+        ...payload,
+
+        sessionId,
+
+        senderSessionId: sessionId,
+
+        senderName:
+          session.anonymousName ||
+          session.name ||
+          'Anonymous',
+
+        type: payload.type || 'text',
+
+        timestamp: Date.now(),
+      };
+
+      io.to(getSocketRoom(roomId)).emit(
+        'message:new',
+        message
+      );
+    } catch (error) {
+      console.error(
+        '[roomEvents] message:send failed:',
+        error
+      );
+    }
+  });
+
+
+  // ==========================================================
+  // MESSAGE: DELETE
+  // ==========================================================
+
+  socket.on('message:delete', (payload) => {
+    try {
+      const messageId = payload?.messageId;
+
+      if (!messageId) {
+        return;
+      }
+
+      io.to(getSocketRoom(roomId)).emit(
+        'message:deleted',
+        {
+          messageId,
+          sessionId,
+        }
+      );
+    } catch (error) {
+      console.error(
+        '[roomEvents] message:delete failed:',
+        error
+      );
+    }
+  });
+
+
+  // ==========================================================
+  // MESSAGE: CLEAR
+  // ==========================================================
+
+  socket.on('message:clear', () => {
+    try {
+      const room = getRoom(roomId);
+
+      if (!room) {
+        return;
+      }
+
+      if (room.ownerId !== sessionId) {
+        return;
+      }
+
+      io.to(getSocketRoom(roomId)).emit(
+        'message:clear',
+        {
+          sessionId,
+        }
+      );
+    } catch (error) {
+      console.error(
+        '[roomEvents] message:clear failed:',
+        error
+      );
+    }
+  });
+
+
+  // ==========================================================
+  // TYPING
+  // ==========================================================
+
+  socket.on('typing:start', () => {
+    socket.to(getSocketRoom(roomId)).emit(
+      'typing:start',
+      {
+        sessionId,
+      }
+    );
+  });
+
+
+  socket.on('typing:stop', () => {
+    socket.to(getSocketRoom(roomId)).emit(
+      'typing:stop',
+      {
+        sessionId,
+      }
+    );
+  });
+
+
+  // ==========================================================
+  // ROOM LOCK
+  // ==========================================================
+
+  socket.on('room:lock', () => {
+    try {
+      const room = getRoom(roomId);
+
+      if (!room) {
+        return;
+      }
+
+      if (room.ownerId !== sessionId) {
+        return;
+      }
+
+      const updatedRoom = updateRoom(
+        roomId,
+        {
+          locked: true,
+        }
+      );
+
+      io.to(getSocketRoom(roomId)).emit(
+        'room:updated',
+        updatedRoom
+      );
+    } catch (error) {
+      console.error(
+        '[roomEvents] room:lock failed:',
+        error
+      );
+    }
+  });
+
+
+  // ==========================================================
+  // ROOM UNLOCK
+  // ==========================================================
+
+  socket.on('room:unlock', () => {
+    try {
+      const room = getRoom(roomId);
+
+      if (!room) {
+        return;
+      }
+
+      if (room.ownerId !== sessionId) {
+        return;
+      }
+
+      const updatedRoom = updateRoom(
+        roomId,
+        {
+          locked: false,
+        }
+      );
+
+      io.to(getSocketRoom(roomId)).emit(
+        'room:updated',
+        updatedRoom
+      );
+    } catch (error) {
+      console.error(
+        '[roomEvents] room:unlock failed:',
+        error
+      );
+    }
+  });
+
+
+  // ==========================================================
+  // ACCEPTING NEW MEMBERS
+  // ==========================================================
+
+  socket.on(
+    'room:set-accepting-members',
+    (payload) => {
+      try {
+        const room = getRoom(roomId);
+
+        if (!room) {
+          return;
+        }
+
+        if (room.ownerId !== sessionId) {
+          return;
+        }
+
+        const accepting =
+          Boolean(payload?.accepting);
+
+        const updatedRoom = updateRoom(
           roomId,
+          {
+            acceptingNewMembers: accepting,
+          }
+        );
+
+        io.to(getSocketRoom(roomId)).emit(
+          'room:updated',
+          updatedRoom
+        );
+      } catch (error) {
+        console.error(
+          '[roomEvents] room:set-accepting-members failed:',
+          error
+        );
+      }
+    }
+  );
+
+
+  // ==========================================================
+  // FILE SHARING
+  // ==========================================================
+
+  socket.on(
+    'room:set-file-sharing',
+    (payload) => {
+      try {
+        const room = getRoom(roomId);
+
+        if (!room) {
+          return;
+        }
+
+        if (room.ownerId !== sessionId) {
+          return;
+        }
+
+        const enabled =
+          Boolean(payload?.enabled);
+
+        const updatedRoom = updateRoom(
+          roomId,
+          {
+            fileSharingEnabled: enabled,
+          }
+        );
+
+        io.to(getSocketRoom(roomId)).emit(
+          'room:updated',
+          updatedRoom
+        );
+      } catch (error) {
+        console.error(
+          '[roomEvents] room:set-file-sharing failed:',
+          error
+        );
+      }
+    }
+  );
+
+
+  // ==========================================================
+  // MAX PARTICIPANTS
+  // ==========================================================
+
+  socket.on(
+    'room:set-max-participants',
+    (payload) => {
+      try {
+        const room = getRoom(roomId);
+
+        if (!room) {
+          return;
+        }
+
+        if (room.ownerId !== sessionId) {
+          return;
+        }
+
+        const maxParticipants =
+          Number(payload?.maxParticipants);
+
+        if (
+          !Number.isFinite(maxParticipants) ||
+          maxParticipants < 1
+        ) {
+          return;
+        }
+
+        const updatedRoom = updateRoom(
+          roomId,
+          {
+            maxParticipants,
+          }
+        );
+
+        io.to(getSocketRoom(roomId)).emit(
+          'room:updated',
+          updatedRoom
+        );
+      } catch (error) {
+        console.error(
+          '[roomEvents] room:set-max-participants failed:',
+          error
+        );
+      }
+    }
+  );
+
+
+  // ==========================================================
+  // EXTEND ROOM EXPIRATION
+  // ==========================================================
+
+  socket.on(
+    'room:extend-expiration',
+    (payload) => {
+      try {
+        const room = getRoom(roomId);
+
+        if (!room) {
+          return;
+        }
+
+        if (room.ownerId !== sessionId) {
+          return;
+        }
+
+        const additionalSeconds =
+          Number(payload?.additionalSeconds);
+
+        if (
+          !Number.isFinite(additionalSeconds) ||
+          additionalSeconds <= 0
+        ) {
+          return;
+        }
+
+        const currentExpiresAt =
+          new Date(room.expiresAt).getTime();
+
+        const newExpiresAt =
+          currentExpiresAt +
+          additionalSeconds * 1000;
+
+        const updatedRoom = updateRoom(
+          roomId,
+          {
+            expiresAt:
+              new Date(newExpiresAt).toISOString(),
+          }
+        );
+
+        io.to(getSocketRoom(roomId)).emit(
+          'room:updated',
+          updatedRoom
+        );
+      } catch (error) {
+        console.error(
+          '[roomEvents] room:extend-expiration failed:',
+          error
+        );
+      }
+    }
+  );
+
+
+  // ==========================================================
+  // REMOVE PARTICIPANT
+  //
+  // This is an EXPLICIT action by the host.
+  // It is different from a temporary socket disconnect.
+  // ==========================================================
+
+  socket.on(
+    'room:remove-participant',
+    (payload) => {
+      try {
+        const room = getRoom(roomId);
+
+        if (!room) {
+          return;
+        }
+
+        if (room.ownerId !== sessionId) {
+          return;
+        }
+
+        const targetSessionId =
+          payload?.sessionId;
+
+        if (!targetSessionId) {
+          return;
+        }
+
+        if (
+          targetSessionId ===
+          room.ownerId
+        ) {
+          return;
+        }
+
+        const targetSession =
+          getSession(targetSessionId);
+
+        if (!targetSession) {
+          return;
+        }
+
+        removeParticipant(
+          roomId,
+          targetSessionId
+        );
+
+        io.to(getSocketRoom(roomId)).emit(
+          'room:user-left',
+          {
+            sessionId:
+              targetSessionId,
+          }
+        );
+
+        const targetSocket =
+          findParticipantSocket(
+            io,
+            roomId,
+            targetSessionId
+          );
+
+        if (targetSocket) {
+          targetSocket.emit(
+            'room:removed',
+            {
+              roomId,
+              message:
+                'You were removed from the room by the host.',
+            }
+          );
+
+          targetSocket.leave(
+            getSocketRoom(roomId)
+          );
+
+          targetSocket.disconnect(
+            true
+          );
+        }
+      } catch (error) {
+        console.error(
+          '[roomEvents] room:remove-participant failed:',
+          error
+        );
+      }
+    }
+  );
+
+
+  // ==========================================================
+  // DESTROY ROOM
+  //
+  // Explicit host action.
+  // ==========================================================
+
+  socket.on(
+    'room:destroy',
+    () => {
+      try {
+        const room = getRoom(roomId);
+
+        if (!room) {
+          return;
+        }
+
+        if (room.ownerId !== sessionId) {
+          return;
+        }
+
+        console.log(
+          `[roomEvents] Host explicitly destroying room ${roomId}`
+        );
+
+        io.to(getSocketRoom(roomId)).emit(
+          'room:expired',
+          {
+            roomId,
+            reason: 'destroyed',
+          }
+        );
+
+        destroyRoom(roomId);
+
+        const roomName =
+          getSocketRoom(roomId);
+
+        const sockets =
+          io.sockets.adapter.rooms.get(
+            roomName
+          );
+
+        if (sockets) {
+          for (const socketId of sockets) {
+            const participantSocket =
+              io.sockets.sockets.get(
+                socketId
+              );
+
+            if (participantSocket) {
+              participantSocket.leave(
+                roomName
+              );
+
+              participantSocket.disconnect(
+                true
+              );
+            }
+          }
+        }
+      } catch (error) {
+        console.error(
+          '[roomEvents] room:destroy failed:',
+          error
+        );
+      }
+    }
+  );
+
+
+  // ==========================================================
+  // EXPLICIT LEAVE ROOM
+  //
+  // IMPORTANT:
+  // This is now the ONLY normal way a user's session is
+  // destroyed because they left.
+  //
+  // A temporary Socket.IO disconnect DOES NOT come here.
+  // ==========================================================
+
+  socket.on(
+    'room:leave',
+    () => {
+      try {
+        const room = getRoom(roomId);
+
+        if (!room) {
+          return;
+        }
+
+        console.log(
+          `[roomEvents] Explicit leave: room=${roomId} session=${sessionId}`
+        );
+
+        // ----------------------------------------------------
+        // OWNER LEAVES
+        // ----------------------------------------------------
+
+        if (
+          room.ownerId === sessionId
+        ) {
+          io.to(
+            getSocketRoom(roomId)
+          ).emit(
+            'room:expired',
+            {
+              roomId,
+              reason: 'owner-left',
+            }
+          );
+
+          destroyRoom(roomId);
+
+          return;
+        }
+
+        // ----------------------------------------------------
+        // PARTICIPANT LEAVES
+        // ----------------------------------------------------
+
+        destroySession(
           sessionId
         );
 
-        markRoomAsDestroyed(
-          io,
-          roomId
-        );
-
-        io.to(roomId).emit(
-          'room:expired'
-        );
-
-        io.in(roomId).disconnectSockets(true);
-
-        logger.info(
-          'Owner explicitly left - room destroyed',
+        io.to(
+          getSocketRoom(roomId)
+        ).emit(
+          'room:user-left',
           {
-            roomId,
             sessionId,
           }
         );
 
-        return;
-      }
-
-      /*
-       * Normal participant explicitly leaves.
-       */
-      sessionManager.destroySession(
-        roomId,
-        sessionId
-      );
-
-      socket.to(roomId).emit(
-        'room:user-left',
-        {
-          id: sessionId,
-        }
-      );
-
-      const leavingName =
-        socket.data.anonymousName;
-
-      if (leavingName) {
-        const leaveNotice =
-          createSystemMessage(
-            `${leavingName} left the room.`
-          );
-
-        store.addMessage(
-          roomId,
-          leaveNotice
+        socket.leave(
+          getSocketRoom(roomId)
         );
-
-        socket.to(roomId).emit(
-          'message:new',
-          leaveNotice
+      } catch (error) {
+        console.error(
+          '[roomEvents] room:leave failed:',
+          error
         );
       }
-
-      logger.info(
-        'Participant explicitly left',
-        {
-          roomId,
-          sessionId,
-        }
-      );
-    } catch (error) {
-      logger.warn(
-        'Failed to process explicit room leave',
-        {
-          roomId,
-          sessionId,
-          error: error.message,
-        }
-      );
     }
-  });
+  );
 
-  /**
-   * Handle socket disconnecting
-   *
-   * IMPORTANT:
-   *
-   * DO NOT destroy a session or room here.
-   *
-   * A disconnect can be temporary:
-   *
-   * - iOS Safari opens a file viewer
-   * - Android opens a file picker
-   * - user switches applications
-   * - browser temporarily suspends the page
-   * - network changes
-   *
-   * Socket.IO will attempt to reconnect using the
-   * same roomId/sessionId.
-   *
-   * Therefore the session must remain in memory.
-   */
-  socket.on('disconnecting', () => {
-    logger.info(
-      'Socket temporarily disconnected',
-      {
-        roomId,
-        sessionId,
-        isOwner: socket.data.isOwner,
-        reason: socket.data.disconnectReason || 'unknown',
-      }
-    );
 
-    /*
-     * Intentionally do NOTHING else here.
-     *
-     * In particular:
-     *
-     * - do NOT destroy the room
-     * - do NOT destroy the session
-     * - do NOT emit room:expired
-     * - do NOT emit room:removed
-     * - do NOT remove the participant
-     */
-  });
+  // ==========================================================
+  // SOCKET DISCONNECTING
+  //
+  // VERY IMPORTANT:
+  //
+  // DO NOT destroy room here.
+  // DO NOT destroy session here.
+  //
+  // iOS Safari can temporarily disconnect a WebSocket when
+  // opening a file viewer, switching apps, locking the screen,
+  // or moving the browser into the background.
+  //
+  // Therefore a disconnect is NOT considered a room leave.
+  // ==========================================================
+
+  socket.on(
+    'disconnecting',
+    (reason) => {
+      console.log(
+        `[roomEvents] Socket temporarily disconnecting: room=${roomId} session=${sessionId} reason=${reason}`
+      );
+
+      // Intentionally do nothing.
+      //
+      // DO NOT:
+      // destroyRoom(roomId)
+      // destroySession(sessionId)
+      // emit room:expired
+      // emit room:user-left
+      //
+      // The client is allowed to reconnect.
+    }
+  );
+
+
+  // ==========================================================
+  // SOCKET DISCONNECTED
+  // ==========================================================
+
+  socket.on(
+    'disconnect',
+    (reason) => {
+      console.log(
+        `[roomEvents] Socket disconnected: room=${roomId} session=${sessionId} reason=${reason}`
+      );
+
+      // ------------------------------------------------------
+      // IMPORTANT:
+      //
+      // Still do NOT destroy the room/session here.
+      //
+      // Socket.IO will reconnect on the client.
+      // The session remains valid until:
+      //
+      // - user explicitly leaves
+      // - host explicitly removes them
+      // - host destroys the room
+      // - room expires
+      // - server/session expiration logic invalidates it
+      // ------------------------------------------------------
+    }
+  );
 }
-
-module.exports = registerRoomEvents;
