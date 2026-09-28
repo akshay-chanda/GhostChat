@@ -2,68 +2,25 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { joinRoom } from '../../services/roomService';
 
-/**
- * JoinRoomForm
- *
- * Supports normal manual joining and invitation links.
- *
- * Invitation URL format:
- *
- *   /join?room=ROOM_ID&password=PASSWORD
- *
- * When a user opens a Share Link or scans the QR code,
- * the Room ID and Password are automatically filled.
- *
- * The user can still edit both fields manually.
- */
-export default function JoinRoomForm({
-  initialRoomId = '',
-}) {
+export default function JoinRoomForm({ initialRoomId = '' }) {
   const navigate = useNavigate();
-
   const [searchParams] = useSearchParams();
 
-  const [roomId, setRoomId] =
-    useState(initialRoomId);
+  const [roomId, setRoomId] = useState(initialRoomId);
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
 
-  const [password, setPassword] =
-    useState('');
-
-  const [submitting, setSubmitting] =
-    useState(false);
-
-  const [error, setError] =
-    useState(null);
-
-  /*
-   * Read invitation information from the URL.
-   *
-   * Example:
-   *
-   * /join?room=ABC123&password=hello123
-   */
+  // Automatically fill Room ID and Password from
+  // Share Link / Copy Link / QR code
   useEffect(() => {
-    const roomFromUrl =
-      searchParams.get('room');
+    const roomFromUrl = searchParams.get('room');
+    const passwordFromUrl = searchParams.get('password');
 
-    const passwordFromUrl =
-      searchParams.get('password');
-
-    /*
-     * Automatically fill Room ID.
-     */
     if (roomFromUrl) {
-      setRoomId(
-        roomFromUrl.trim().toUpperCase()
-      );
+      setRoomId(roomFromUrl.trim().toUpperCase());
     }
 
-    /*
-     * Automatically fill Password.
-     *
-     * Do NOT trim the password because spaces
-     * could technically be part of a password.
-     */
     if (passwordFromUrl !== null) {
       setPassword(passwordFromUrl);
     }
@@ -76,8 +33,7 @@ export default function JoinRoomForm({
     setSubmitting(true);
 
     try {
-      const normalizedRoomId =
-        roomId.trim().toUpperCase();
+      const normalizedRoomId = roomId.trim().toUpperCase();
 
       const session = await joinRoom({
         roomId: normalizedRoomId,
@@ -88,8 +44,7 @@ export default function JoinRoomForm({
         state: {
           password,
           sessionId: session.sessionId,
-          anonymousName:
-            session.anonymousName,
+          anonymousName: session.anonymousName,
           isOwner: false,
         },
       });
@@ -101,13 +56,9 @@ export default function JoinRoomForm({
           'Too many attempts. Wait a moment before trying again.'
         );
       } else if (status === 409) {
-        setError(
-          'This room is full.'
-        );
+        setError('This room is full.');
       } else {
-        setError(
-          'Room ID or password is incorrect.'
-        );
+        setError('Room ID or password is incorrect.');
       }
     } finally {
       setSubmitting(false);
@@ -115,56 +66,14 @@ export default function JoinRoomForm({
   };
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="
-        mx-auto
-        w-full
-        max-w-sm
-        min-w-0
-      "
-    >
-      <h1
-        className="
-          text-xl
-          xs:text-2xl
-          font-semibold
-          leading-tight
-          text-[#F8FAFC]
-        "
-      >
-        Join a room
-      </h1>
+    <form onSubmit={handleSubmit} className="w-full">
+      <div className="space-y-5">
 
-      <p
-        className="
-          mt-1.5
-          text-sm
-          leading-5
-          text-[#94A3B8]
-        "
-      >
-        No account required. Your identity stays anonymous.
-      </p>
-
-      <div
-        className="
-          mt-6
-          xs:mt-8
-          space-y-5
-        "
-      >
         {/* Room ID */}
-
-        <div className="min-w-0">
+        <div>
           <label
             htmlFor="roomId"
-            className="
-              mb-1.5
-              block
-              text-sm
-              text-[#F8FAFC]
-            "
+            className="mb-1.5 block text-sm text-[#F8FAFC]"
           >
             Room ID
           </label>
@@ -174,29 +83,23 @@ export default function JoinRoomForm({
             type="text"
             value={roomId}
             onChange={(e) =>
-              setRoomId(e.target.value)
+              setRoomId(e.target.value.toUpperCase())
             }
             required
             autoComplete="off"
-            autoCapitalize="characters"
-            spellCheck="false"
-            placeholder="7F3K9A2M"
+            placeholder="Enter room ID"
             className="
               min-h-11
               w-full
-              min-w-0
               rounded-lg
-              border border-white/10
+              border
+              border-white/10
               bg-[#111827]
               px-3.5
               py-2.5
               text-base
-              font-mono
-              tracking-wider
               text-[#F8FAFC]
-              placeholder:font-mono
               placeholder:text-[#94A3B8]/60
-              transition-colors
               focus:border-transparent
               focus:outline-none
               focus-visible:ring-2
@@ -207,43 +110,34 @@ export default function JoinRoomForm({
         </div>
 
         {/* Password */}
-
-        <div className="min-w-0">
+        <div>
           <label
-            htmlFor="joinPassword"
-            className="
-              mb-1.5
-              block
-              text-sm
-              text-[#F8FAFC]
-            "
+            htmlFor="roomPassword"
+            className="mb-1.5 block text-sm text-[#F8FAFC]"
           >
-            Password
+            Room password
           </label>
 
           <input
-            id="joinPassword"
+            id="roomPassword"
             type="password"
             value={password}
-            onChange={(e) =>
-              setPassword(e.target.value)
-            }
+            onChange={(e) => setPassword(e.target.value)}
             required
             autoComplete="current-password"
-            placeholder="••••••••"
+            placeholder="Enter room password"
             className="
               min-h-11
               w-full
-              min-w-0
               rounded-lg
-              border border-white/10
+              border
+              border-white/10
               bg-[#111827]
               px-3.5
               py-2.5
               text-base
               text-[#F8FAFC]
               placeholder:text-[#94A3B8]/60
-              transition-colors
               focus:border-transparent
               focus:outline-none
               focus-visible:ring-2
@@ -254,13 +148,13 @@ export default function JoinRoomForm({
         </div>
 
         {/* Error */}
-
         {error && (
           <p
             role="alert"
             className="
               rounded-lg
-              border border-[#EF4444]/20
+              border
+              border-[#EF4444]/20
               bg-[#EF4444]/5
               px-3
               py-2.5
@@ -274,7 +168,6 @@ export default function JoinRoomForm({
         )}
 
         {/* Submit */}
-
         <button
           type="submit"
           disabled={submitting}
@@ -303,10 +196,9 @@ export default function JoinRoomForm({
             touch-manipulation
           "
         >
-          {submitting
-            ? 'Joining…'
-            : 'Join secure room'}
+          {submitting ? 'Joining room…' : 'Join room'}
         </button>
+
       </div>
     </form>
   );

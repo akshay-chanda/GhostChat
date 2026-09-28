@@ -36,7 +36,7 @@ export default function CreateRoomPage() {
   // --------------------------------------------------
 
   const handleShowQr = () => {
-    if (!createdRoom?.shareLink) {
+    if (!createdRoom?.roomId) {
       return;
     }
 
@@ -112,6 +112,8 @@ export default function CreateRoomPage() {
               open={qrOpen}
               onClose={handleCloseQr}
               shareLink={createdRoom.shareLink}
+              roomId={createdRoom.roomId}
+              password={createdRoom.password}
             />
           </>
         ) : (

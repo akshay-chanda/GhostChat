@@ -15,26 +15,20 @@ export default function QRModal({
   const [copied, setCopied] = useState(false);
 
   /*
-   * Generate the frontend invitation URL.
+   * Create the invitation link used by:
    *
-   * The URL contains:
-   *
-   *   room     = Room ID
-   *   password = Room password
+   * 1. QR code
+   * 2. Copy link
+   * 3. Share link
    *
    * Example:
    *
-   * https://your-app.vercel.app/join?room=ABC123&password=secret
+   * https://ghost-chat-akshay.vercel.app/join?room=ABC123&password=hello123
    *
-   * This same URL is used for:
+   * JoinRoomForm reads these two query parameters:
    *
-   *   - QR code
-   *   - Copy link
-   *   - Share link
-   *
-   * When the user opens/scans the QR code,
-   * the Join Room page can automatically fill
-   * the Room ID and Password.
+   * room
+   * password
    */
   const frontendShareLink = useMemo(() => {
     if (
@@ -43,29 +37,40 @@ export default function QRModal({
     ) {
       const params = new URLSearchParams();
 
-      params.set('room', roomId);
+      params.set(
+        'room',
+        roomId.trim().toUpperCase()
+      );
 
-      if (password) {
+      /*
+       * Include the password in the invitation URL.
+       *
+       * This allows JoinRoomForm to automatically
+       * fill the password field.
+       */
+      if (password !== undefined && password !== null) {
         params.set('password', password);
       }
 
-      return `${window.location.origin}/join?${params.toString()}`;
+      return (
+        `${window.location.origin}` +
+        `/join?${params.toString()}`
+      );
     }
 
     /*
-     * Defensive fallback.
+     * Fallback.
      *
-     * If roomId is unavailable but the backend
-     * supplied a shareLink, convert it to the
-     * current frontend origin where possible.
+     * If roomId is unavailable, use the supplied
+     * shareLink.
      */
-    if (
-      typeof window !== 'undefined' &&
-      shareLink
-    ) {
+    if (shareLink) {
       try {
         const url = new URL(shareLink);
 
+        /*
+         * Keep the current frontend domain.
+         */
         return (
           `${window.location.origin}` +
           `${url.pathname}` +
@@ -77,14 +82,11 @@ export default function QRModal({
       }
     }
 
-    return shareLink || '';
+    return '';
   }, [roomId, password, shareLink]);
 
   /*
    * Generate QR code.
-   *
-   * The QR code contains the complete invitation URL,
-   * including the room ID and password.
    */
   useEffect(() => {
     if (
@@ -95,10 +97,11 @@ export default function QRModal({
       return;
     }
 
-    /*
-     * Clear the old QR code first.
-     */
     const canvas = canvasRef.current;
+
+    /*
+     * Clear any previous QR code.
+     */
     const context = canvas.getContext('2d');
 
     if (context) {
@@ -116,6 +119,7 @@ export default function QRModal({
       {
         width: 220,
         margin: 2,
+        errorCorrectionLevel: 'M',
         color: {
           dark: '#0B0F14',
           light: '#F8FAFC',
@@ -133,10 +137,12 @@ export default function QRModal({
   }, [open, frontendShareLink]);
 
   /*
-   * Escape key.
+   * Escape key closes the modal.
    */
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      return;
+    }
 
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
@@ -158,7 +164,7 @@ export default function QRModal({
   }, [open, onClose]);
 
   /*
-   * Reset copied state when closed.
+   * Reset copied state whenever modal closes.
    */
   useEffect(() => {
     if (!open) {
@@ -166,17 +172,9 @@ export default function QRModal({
     }
   }, [open]);
 
-  if (!open) {
-    return null;
-  }
-
   /*
-   * Copy invitation link.
-   *
-   * Uses Clipboard API when available.
-   *
-   * Falls back to a textarea for browsers where
-   * navigator.clipboard is unavailable.
+   * Copy the exact same invitation URL
+   * that is inside the QR code.
    */
   const handleCopy = async () => {
     if (!frontendShareLink) {
@@ -184,6 +182,9 @@ export default function QRModal({
     }
 
     try {
+      /*
+       * Modern browsers.
+       */
       if (
         navigator.clipboard &&
         window.isSecureContext
@@ -192,11 +193,13 @@ export default function QRModal({
           frontendShareLink
         );
       } else {
+        /*
+         * Fallback for older browsers.
+         */
         const textarea =
           document.createElement('textarea');
 
-        textarea.value =
-          frontendShareLink;
+        textarea.value = frontendShareLink;
 
         textarea.style.position = 'fixed';
         textarea.style.left = '-9999px';
@@ -231,6 +234,13 @@ export default function QRModal({
       );
     }
   };
+
+  /*
+   * Do not render anything when closed.
+   */
+  if (!open) {
+    return null;
+  }
 
   return createPortal(
     <div
@@ -346,15 +356,32 @@ export default function QRModal({
               p-3
             "
           >
-            <canvas
-              ref={canvasRef}
-              className="
-                block
-                h-auto
-                max-w-full
-              "
-              aria-label="QR code containing the room invitation link"
-            />
+            {frontendShareLink ? (
+              <canvas
+                ref={canvasRef}
+                className="
+                  block
+                  h-auto
+                  max-w-full
+                "
+                aria-label="QR code containing the room invitation link"
+              />
+            ) : (
+              <div
+                className="
+                  flex
+                  h-[220px]
+                  w-[220px]
+                  items-center
+                  justify-center
+                  text-center
+                  text-xs
+                  text-[#64748B]
+                "
+              >
+                Unable to generate QR code.
+              </div>
+            )}
           </div>
         </div>
 
@@ -406,6 +433,42 @@ export default function QRModal({
               "
             >
               {roomId}
+            </p>
+          </div>
+        )}
+
+        {/* Invitation link preview */}
+
+        {frontendShareLink && (
+          <div
+            className="
+              mt-3
+              rounded-lg
+              border border-white/5
+              bg-[#0B0F14]
+              px-3
+              py-2.5
+            "
+          >
+            <p
+              className="
+                text-xs
+                text-[#94A3B8]
+              "
+            >
+              Invitation link
+            </p>
+
+            <p
+              className="
+                mt-1
+                break-all
+                text-[11px]
+                leading-4
+                text-[#64748B]
+              "
+            >
+              {frontendShareLink}
             </p>
           </div>
         )}
