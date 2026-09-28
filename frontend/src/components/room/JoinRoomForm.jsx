@@ -13,7 +13,14 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
 
   /*
    * Automatically fill Room ID and Password
-   * from Share Link / Copy Link / QR code.
+   * from:
+   *
+   * - Share Link
+   * - Copy Link
+   * - QR code
+   *
+   * Example:
+   * /join?room=ABC123&password=hello123
    */
   useEffect(() => {
     const roomFromUrl = searchParams.get('room');
@@ -79,7 +86,7 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
     >
       {/* Heading */}
 
-      <div>
+      <div className="text-left">
         <h1
           className="
             text-2xl
@@ -103,13 +110,13 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
         </p>
       </div>
 
-      {/* Form */}
+      {/* Form fields */}
 
       <div
         className="
           mt-6
           space-y-5
-          xs:mt-8
+          sm:mt-8
         "
       >
         {/* Room ID */}
@@ -120,6 +127,7 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
             className="
               mb-1.5
               block
+              text-left
               text-sm
               text-[#F8FAFC]
             "
@@ -166,6 +174,7 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
             className="
               mb-1.5
               block
+              text-left
               text-sm
               text-[#F8FAFC]
             "
@@ -216,6 +225,7 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
               bg-[#EF4444]/5
               px-3
               py-2.5
+              text-left
               text-sm
               leading-5
               text-[#EF4444]
