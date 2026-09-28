@@ -199,6 +199,10 @@ export function disconnectSocket() {
  * Leave the current room.
  */
 export function leaveRoom() {
+  if (socket?.connected) {
+    socket.emit('room:leave');
+  }
+
   disconnectSocket();
 }
 

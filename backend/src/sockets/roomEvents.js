@@ -1,4 +1,3 @@
-
 const roomManager = require('../services/roomManager');
 const sessionManager = require('../services/sessionManager');
 const store = require('../storage/memoryStore');
@@ -21,8 +20,8 @@ function emitError(socket, message) {
 /**
  * Mark every socket belonging to a room as already destroyed.
  *
- * This prevents duplicate cleanup when the owner disconnects
- * and Socket.IO disconnects all other users.
+ * This prevents duplicate cleanup when the owner explicitly
+ * destroys the room and Socket.IO disconnects all other users.
  */
 function markRoomAsDestroyed(io, roomId) {
   for (const clientSocket of io.sockets.sockets.values()) {
@@ -186,6 +185,8 @@ function registerRoomEvents(io, socket) {
 
   /**
    * Remove a participant
+   *
+   * This is an EXPLICIT owner action.
    */
   socket.on(
     'room:remove-participant',
@@ -197,21 +198,17 @@ function registerRoomEvents(io, socket) {
           );
         }
 
-        // Validate that the target session exists
         const target = sessionManager.validateSession(
           roomId,
           targetSessionId
         );
 
-        // Only the room owner should be allowed
-        // to remove participants.
         roomManager.removeParticipant(
           roomId,
           sessionId,
           targetSessionId
         );
 
-        // Notify all remaining participants
         io.to(roomId).emit(
           'room:user-left',
           {
@@ -219,7 +216,6 @@ function registerRoomEvents(io, socket) {
           }
         );
 
-        // Create a system message
         if (target) {
           const removedNotice = createSystemMessage(
             `${target.anonymousName} was removed from the room.`
@@ -236,7 +232,6 @@ function registerRoomEvents(io, socket) {
           );
         }
 
-        // Find the removed participant's socket
         const targetSocket = findParticipantSocket(
           io,
           roomId,
@@ -244,13 +239,14 @@ function registerRoomEvents(io, socket) {
         );
 
         if (targetSocket) {
-          // Prevent normal disconnect cleanup
+          /*
+           * This is a real removal, not a temporary
+           * mobile/browser disconnect.
+           */
           targetSocket.data.suppressLeaveEvent = true;
 
-          // Notify the removed participant
           targetSocket.emit('room:removed');
 
-          // Disconnect only the removed participant
           targetSocket.disconnect(true);
         }
       } catch (error) {
@@ -261,6 +257,9 @@ function registerRoomEvents(io, socket) {
 
   /**
    * Explicitly destroy room
+   *
+   * This is the ONLY normal socket action that
+   * destroys the entire room.
    */
   socket.on('room:destroy', () => {
     try {
@@ -269,18 +268,15 @@ function registerRoomEvents(io, socket) {
         sessionId
       );
 
-      // Mark every socket before disconnecting them
       markRoomAsDestroyed(
         io,
         roomId
       );
 
-      // Notify everyone that the room is closed
       io.to(roomId).emit(
         'room:expired'
       );
 
-      // Disconnect all sockets in the room
       io.in(roomId).disconnectSockets(true);
 
       logger.info(
@@ -296,106 +292,83 @@ function registerRoomEvents(io, socket) {
   });
 
   /**
-   * Handle socket disconnecting
+   * Explicit leave room
    *
-   * "disconnecting" is used because the socket
-   * is still inside the Socket.IO room.
+   * IMPORTANT:
+   *
+   * We use a separate event for an intentional leave.
+   *
+   * A normal WebSocket disconnect is NOT treated as
+   * leaving the room because mobile browsers can
+   * temporarily disconnect when opening file viewers,
+   * file pickers, other applications, etc.
    */
-  socket.on('disconnecting', () => {
-    const leavingName = socket.data.anonymousName;
+  socket.on('room:leave', () => {
+    try {
+      if (socket.data.intentionalLeave) {
+        return;
+      }
 
-    // Skip cleanup when the room was already destroyed
-    if (socket.data.roomAlreadyDestroyed) {
-      return;
-    }
+      socket.data.intentionalLeave = true;
 
-    // Skip cleanup when a participant was manually removed
-    if (socket.data.suppressLeaveEvent) {
-      return;
-    }
-
-    /**
-     * Owner disconnected
-     *
-     * Destroy the room and disconnect every participant.
-     */
-    if (socket.data.isOwner) {
-      try {
+      /*
+       * Owner explicitly leaving:
+       *
+       * Keep the existing GhostChat behavior where the
+       * owner's intentional leave destroys the room.
+       */
+      if (socket.data.isOwner) {
         roomManager.destroyRoom(
           roomId,
           sessionId
         );
-      } catch (error) {
-        logger.warn(
-          'Room was already destroyed',
+
+        markRoomAsDestroyed(
+          io,
+          roomId
+        );
+
+        io.to(roomId).emit(
+          'room:expired'
+        );
+
+        io.in(roomId).disconnectSockets(true);
+
+        logger.info(
+          'Owner explicitly left - room destroyed',
           {
             roomId,
-            error: error.message,
+            sessionId,
           }
         );
+
+        return;
       }
 
-      // Prevent duplicate cleanup for all room sockets
-      markRoomAsDestroyed(
-        io,
-        roomId
-      );
-
-      // Notify all users
-      io.to(roomId).emit(
-        'room:expired'
-      );
-
-      // Disconnect every participant
-      io.in(roomId).disconnectSockets(true);
-
-      logger.info(
-        'Owner disconnected - room destroyed',
-        {
-          roomId,
-          sessionId,
-        }
-      );
-
-      return;
-    }
-
-    /**
-     * Non-owner disconnected
-     *
-     * Remove only the disconnected participant.
-     */
-    try {
+      /*
+       * Normal participant explicitly leaves.
+       */
       sessionManager.destroySession(
         roomId,
         sessionId
       );
-    } catch (error) {
-      logger.warn(
-        'Failed to destroy participant session',
+
+      socket.to(roomId).emit(
+        'room:user-left',
         {
-          roomId,
-          sessionId,
-          error: error.message,
+          id: sessionId,
         }
       );
-    }
 
-    // Notify other participants
-    socket.to(roomId).emit(
-      'room:user-left',
-      {
-        id: sessionId,
-      }
-    );
+      const leavingName =
+        socket.data.anonymousName;
 
-    // Create a leave notification
-    if (leavingName) {
-      const leaveNotice = createSystemMessage(
-        `${leavingName} left the room.`
-      );
+      if (leavingName) {
+        const leaveNotice =
+          createSystemMessage(
+            `${leavingName} left the room.`
+          );
 
-      try {
         store.addMessage(
           roomId,
           leaveNotice
@@ -405,24 +378,69 @@ function registerRoomEvents(io, socket) {
           'message:new',
           leaveNotice
         );
-      } catch (error) {
-        logger.warn(
-          'Failed to save leave notification',
-          {
-            roomId,
-            error: error.message,
-          }
-        );
       }
-    }
 
+      logger.info(
+        'Participant explicitly left',
+        {
+          roomId,
+          sessionId,
+        }
+      );
+    } catch (error) {
+      logger.warn(
+        'Failed to process explicit room leave',
+        {
+          roomId,
+          sessionId,
+          error: error.message,
+        }
+      );
+    }
+  });
+
+  /**
+   * Handle socket disconnecting
+   *
+   * IMPORTANT:
+   *
+   * DO NOT destroy a session or room here.
+   *
+   * A disconnect can be temporary:
+   *
+   * - iOS Safari opens a file viewer
+   * - Android opens a file picker
+   * - user switches applications
+   * - browser temporarily suspends the page
+   * - network changes
+   *
+   * Socket.IO will attempt to reconnect using the
+   * same roomId/sessionId.
+   *
+   * Therefore the session must remain in memory.
+   */
+  socket.on('disconnecting', () => {
     logger.info(
-      'Participant disconnected',
+      'Socket temporarily disconnected',
       {
         roomId,
         sessionId,
+        isOwner: socket.data.isOwner,
+        reason: socket.data.disconnectReason || 'unknown',
       }
     );
+
+    /*
+     * Intentionally do NOTHING else here.
+     *
+     * In particular:
+     *
+     * - do NOT destroy the room
+     * - do NOT destroy the session
+     * - do NOT emit room:expired
+     * - do NOT emit room:removed
+     * - do NOT remove the participant
+     */
   });
 }
 
