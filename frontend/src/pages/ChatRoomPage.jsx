@@ -47,7 +47,51 @@ export default function ChatRoomPage() {
   const location = useLocation();
   const navigate = useNavigate();
 
+  // --------------------------------------------------
+  // Detect an actual browser reload
+  // --------------------------------------------------
+
+  const navigationEntry =
+    typeof window !== 'undefined'
+      ? performance.getEntriesByType('navigation')[0]
+      : null;
+
+  const isPageReload =
+    navigationEntry?.type === 'reload';
+
+  // --------------------------------------------------
+  // Restore room session
+  //
+  // IMPORTANT:
+  //
+  // We do NOT restore the saved session after a
+  // real browser reload.
+  //
+  // This means:
+  //
+  // F5 / Refresh
+  //      ↓
+  // Home
+  //
+  // But:
+  //
+  // iOS file viewer
+  //      ↓
+  // temporary socket disconnect
+  //      ↓
+  // return to GhostChat
+  //      ↓
+  // reconnect to same room
+  // --------------------------------------------------
+
   const [session] = useState(() => {
+    // Never restore the old room session after
+    // an actual browser reload.
+    if (isPageReload) {
+      return null;
+    }
+
+    // Normal navigation from Join Room / Create Room.
     if (
       location.state?.password &&
       location.state?.sessionId
@@ -55,6 +99,8 @@ export default function ChatRoomPage() {
       return location.state;
     }
 
+    // Restore session when returning to the room
+    // without a full browser reload.
     try {
       const savedSession = sessionStorage.getItem(
         `ghostchat-session-${roomId}`
@@ -74,10 +120,41 @@ export default function ChatRoomPage() {
   });
 
   // --------------------------------------------------
-  // Save session for browser reload restoration
+  // Handle browser reload
   // --------------------------------------------------
 
   useEffect(() => {
+    if (!isPageReload) {
+      return;
+    }
+
+    // Remove the old session so the room cannot
+    // automatically reopen after refresh.
+    sessionStorage.removeItem(
+      `ghostchat-session-${roomId}`
+    );
+
+    // Send the user back to Home.
+    navigate('/', {
+      replace: true,
+    });
+  }, [
+    isPageReload,
+    roomId,
+    navigate,
+  ]);
+
+  // --------------------------------------------------
+  // Save session for normal navigation
+  //
+  // Do NOT save it again during a browser reload.
+  // --------------------------------------------------
+
+  useEffect(() => {
+    if (isPageReload) {
+      return;
+    }
+
     if (
       location.state?.password &&
       location.state?.sessionId
@@ -87,13 +164,23 @@ export default function ChatRoomPage() {
         JSON.stringify(location.state)
       );
     }
-  }, [location.state, roomId]);
+  }, [
+    isPageReload,
+    location.state,
+    roomId,
+  ]);
 
   // --------------------------------------------------
   // Validate session
   // --------------------------------------------------
 
   useEffect(() => {
+    // The reload handler above is responsible for
+    // navigating Home during a real browser reload.
+    if (isPageReload) {
+      return;
+    }
+
     if (
       !session?.password ||
       !session?.sessionId
@@ -103,10 +190,25 @@ export default function ChatRoomPage() {
       });
     }
   }, [
+    isPageReload,
     session,
     roomId,
     navigate,
   ]);
+
+  // --------------------------------------------------
+  // During reload handling, render nothing.
+  // This prevents RoomProvider from being created
+  // with an invalid session for even one render.
+  // --------------------------------------------------
+
+  if (isPageReload) {
+    return null;
+  }
+
+  // --------------------------------------------------
+  // No valid session
+  // --------------------------------------------------
 
   if (
     !session?.password ||
