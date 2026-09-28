@@ -8,25 +8,57 @@ export default function QRModal({
   onClose,
   shareLink,
   roomId,
+  password,
 }) {
   const canvasRef = useRef(null);
 
   const [copied, setCopied] = useState(false);
 
   /*
-   * Always generate the share URL from the frontend.
+   * Generate the frontend invitation URL.
+   *
+   * The URL contains:
+   *
+   *   room     = Room ID
+   *   password = Room password
    *
    * Example:
-   * http://localhost:5173/join/FWPFGTPL
+   *
+   * https://your-app.vercel.app/join?room=ABC123&password=secret
+   *
+   * This same URL is used for:
+   *
+   *   - QR code
+   *   - Copy link
+   *   - Share link
+   *
+   * When the user opens/scans the QR code,
+   * the Join Room page can automatically fill
+   * the Room ID and Password.
    */
   const frontendShareLink = useMemo(() => {
     if (
       typeof window !== 'undefined' &&
       roomId
     ) {
-      return `${window.location.origin}/join/${roomId}`;
+      const params = new URLSearchParams();
+
+      params.set('room', roomId);
+
+      if (password) {
+        params.set('password', password);
+      }
+
+      return `${window.location.origin}/join?${params.toString()}`;
     }
 
+    /*
+     * Defensive fallback.
+     *
+     * If roomId is unavailable but the backend
+     * supplied a shareLink, convert it to the
+     * current frontend origin where possible.
+     */
     if (
       typeof window !== 'undefined' &&
       shareLink
@@ -46,10 +78,13 @@ export default function QRModal({
     }
 
     return shareLink || '';
-  }, [roomId, shareLink]);
+  }, [roomId, password, shareLink]);
 
   /*
    * Generate QR code.
+   *
+   * The QR code contains the complete invitation URL,
+   * including the room ID and password.
    */
   useEffect(() => {
     if (
@@ -60,8 +95,23 @@ export default function QRModal({
       return;
     }
 
+    /*
+     * Clear the old QR code first.
+     */
+    const canvas = canvasRef.current;
+    const context = canvas.getContext('2d');
+
+    if (context) {
+      context.clearRect(
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
+    }
+
     QRCode.toCanvas(
-      canvasRef.current,
+      canvas,
       frontendShareLink,
       {
         width: 220,
@@ -70,6 +120,14 @@ export default function QRModal({
           dark: '#0B0F14',
           light: '#F8FAFC',
         },
+      },
+      (error) => {
+        if (error) {
+          console.error(
+            'QR code generation failed:',
+            error
+          );
+        }
       }
     );
   }, [open, frontendShareLink]);
@@ -112,23 +170,65 @@ export default function QRModal({
     return null;
   }
 
+  /*
+   * Copy invitation link.
+   *
+   * Uses Clipboard API when available.
+   *
+   * Falls back to a textarea for browsers where
+   * navigator.clipboard is unavailable.
+   */
   const handleCopy = async () => {
     if (!frontendShareLink) {
       return;
     }
 
     try {
-      await navigator.clipboard.writeText(
-        frontendShareLink
-      );
+      if (
+        navigator.clipboard &&
+        window.isSecureContext
+      ) {
+        await navigator.clipboard.writeText(
+          frontendShareLink
+        );
+      } else {
+        const textarea =
+          document.createElement('textarea');
+
+        textarea.value =
+          frontendShareLink;
+
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        textarea.style.top = '0';
+
+        document.body.appendChild(textarea);
+
+        textarea.focus();
+        textarea.select();
+
+        const successful =
+          document.execCommand('copy');
+
+        document.body.removeChild(textarea);
+
+        if (!successful) {
+          throw new Error(
+            'Clipboard copy failed'
+          );
+        }
+      }
 
       setCopied(true);
 
       setTimeout(() => {
         setCopied(false);
       }, 1800);
-    } catch {
-      // Clipboard unavailable.
+    } catch (error) {
+      console.error(
+        'Copy link failed:',
+        error
+      );
     }
   };
 
@@ -138,12 +238,17 @@ export default function QRModal({
       aria-modal="true"
       aria-label="Room invitation QR code"
       className="
-        fixed inset-0 z-[60]
-        flex items-center justify-center
+        fixed
+        inset-0
+        z-[60]
+        flex
+        items-center
+        justify-center
         overflow-y-auto
         overscroll-contain
         bg-black/60
-        px-3 py-4
+        px-3
+        py-4
         backdrop-blur-sm
         xs:px-4
         sm:py-6
@@ -264,9 +369,46 @@ export default function QRModal({
             text-[#94A3B8]
           "
         >
-          Only the room link is encoded —
-          no password, no personal data.
+          Scan this QR code to automatically
+          fill the Room ID and password.
         </p>
+
+        {/* Room ID preview */}
+
+        {roomId && (
+          <div
+            className="
+              mt-4
+              rounded-lg
+              border border-white/5
+              bg-[#0B0F14]
+              px-3
+              py-2.5
+            "
+          >
+            <p
+              className="
+                text-xs
+                text-[#94A3B8]
+              "
+            >
+              Room ID
+            </p>
+
+            <p
+              className="
+                mt-0.5
+                truncate
+                font-mono
+                text-sm
+                tracking-wide
+                text-[#F8FAFC]
+              "
+            >
+              {roomId}
+            </p>
+          </div>
+        )}
 
         {/* Copy Link */}
 

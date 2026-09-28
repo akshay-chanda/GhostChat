@@ -7,18 +7,22 @@ import { Copy, Check, QrCode } from 'lucide-react';
  *
  * Shown immediately after room creation.
  *
- * IMPORTANT:
- * The backend may return a localhost:3000 URL.
- * We never use that URL for sharing.
+ * The share URL contains:
  *
- * The share URL is always generated from the current
- * frontend origin:
+ *   /join?room=ROOM_ID&password=PASSWORD
  *
- *   http://localhost:5173/join/ROOM_ID
+ * This allows the Join Room page to automatically
+ * fill in the Room ID and Password.
  *
- * or, when accessed over LAN:
+ * The same URL is used for:
  *
- *   http://192.168.x.x:5173/join/ROOM_ID
+ *   - Share Link
+ *   - Copy Link
+ *   - QR Code
+ *
+ * Example:
+ *
+ *   https://your-frontend.vercel.app/join?room=ABC123&password=secret
  */
 export default function RoomCreatedCard({
   roomId,
@@ -38,27 +42,50 @@ export default function RoomCreatedCard({
     useState(null);
 
   /*
-   * NEVER use the backend shareLink when roomId exists.
+   * Generate the frontend join URL.
    *
-   * The browser's current origin is the Vite frontend:
+   * IMPORTANT:
+   * We do NOT use the backend shareLink when roomId exists.
    *
-   * localhost -> http://localhost:5173
-   * LAN       -> http://192.168.x.x:5173
+   * The URL contains both:
+   *
+   *   room    = Room ID
+   *   password = Room password
+   *
+   * Example:
+   *
+   * /join?room=ABC123&password=myPassword
    */
   const frontendShareLink = useMemo(() => {
     if (
       typeof window !== 'undefined' &&
       roomId
     ) {
-      return `${window.location.origin}/join/${roomId}`;
+      const params = new URLSearchParams();
+
+      params.set('room', roomId);
+
+      if (password) {
+        params.set('password', password);
+      }
+
+      return `${window.location.origin}/join?${params.toString()}`;
     }
 
     /*
-     * SSR / defensive fallback only.
+     * Defensive fallback.
      */
     return shareLink || '';
-  }, [roomId, shareLink]);
+  }, [roomId, password, shareLink]);
 
+  /*
+   * Copy text to clipboard.
+   *
+   * Uses the modern Clipboard API first.
+   *
+   * Falls back to a temporary textarea if
+   * clipboard access is unavailable.
+   */
   const handleCopy = async (
     field,
     value
@@ -66,7 +93,37 @@ export default function RoomCreatedCard({
     if (!value) return;
 
     try {
-      await navigator.clipboard.writeText(value);
+      if (
+        navigator.clipboard &&
+        window.isSecureContext
+      ) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textarea =
+          document.createElement('textarea');
+
+        textarea.value = value;
+
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        textarea.style.top = '0';
+
+        document.body.appendChild(textarea);
+
+        textarea.focus();
+        textarea.select();
+
+        const successful =
+          document.execCommand('copy');
+
+        document.body.removeChild(textarea);
+
+        if (!successful) {
+          throw new Error(
+            'Clipboard copy failed'
+          );
+        }
+      }
 
       setCopiedField(field);
 
@@ -77,8 +134,11 @@ export default function RoomCreatedCard({
             : current
         );
       }, 1800);
-    } catch {
-      // Clipboard access denied/unavailable.
+    } catch (error) {
+      console.error(
+        'Copy failed:',
+        error
+      );
     }
   };
 
@@ -112,10 +172,13 @@ export default function RoomCreatedCard({
         w-full
         max-w-md
         min-w-0
-        rounded-xl xs:rounded-2xl
+        rounded-xl
+        xs:rounded-2xl
         border border-white/10
         bg-[#111827]
-        p-4 xs:p-5 sm:p-7
+        p-4
+        xs:p-5
+        sm:p-7
       "
     >
       <h1
@@ -160,7 +223,8 @@ export default function RoomCreatedCard({
               rounded-lg
               border border-white/5
               bg-[#0B0F14]
-              px-3 py-2.5
+              px-3
+              py-2.5
               xs:gap-3
               xs:px-3.5
             "
@@ -299,6 +363,7 @@ export default function RoomCreatedCard({
           sm:mt-6
         "
       >
+        {/* QR CODE */}
         <button
           type="button"
           onClick={() =>
@@ -313,7 +378,8 @@ export default function RoomCreatedCard({
             gap-2
             rounded-lg
             border border-white/10
-            px-4 py-2.5
+            px-4
+            py-2.5
             text-sm
             text-[#F8FAFC]
             transition-colors
@@ -338,6 +404,7 @@ export default function RoomCreatedCard({
           </span>
         </button>
 
+        {/* ENTER ROOM */}
         <button
           type="button"
           onClick={() =>
@@ -358,7 +425,8 @@ export default function RoomCreatedCard({
             justify-center
             rounded-lg
             bg-[#00D9FF]
-            px-4 py-2.5
+            px-4
+            py-2.5
             text-sm
             font-medium
             text-[#0B0F14]
