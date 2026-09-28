@@ -6,7 +6,6 @@ import { X, Copy, Check } from 'lucide-react';
 export default function QRModal({
   open,
   onClose,
-  shareLink,
   roomId,
   password,
 }) {
@@ -14,10 +13,15 @@ export default function QRModal({
   const [copied, setCopied] = useState(false);
 
   /*
-   * ALWAYS create the public invitation URL from the
-   * current frontend origin.
+   * IMPORTANT:
    *
-   * We intentionally DO NOT use the backend shareLink.
+   * We NEVER use the backend Render shareLink here.
+   *
+   * The invitation URL is always generated from:
+   *
+   *   window.location.origin
+   *   roomId
+   *   password
    *
    * Example:
    *
@@ -42,7 +46,10 @@ export default function QRModal({
       password !== undefined &&
       password !== null
     ) {
-      params.set('password', password);
+      params.set(
+        'password',
+        password
+      );
     }
 
     return (
@@ -52,8 +59,10 @@ export default function QRModal({
   }, [roomId, password]);
 
   /*
-   * Generate QR code using the EXACT same
-   * frontend invitation URL.
+   * Generate QR code.
+   *
+   * The QR code contains the exact same URL
+   * that is shown and copied below.
    */
   useEffect(() => {
     if (
@@ -100,7 +109,7 @@ export default function QRModal({
   }, [open, frontendShareLink]);
 
   /*
-   * Escape key closes modal.
+   * Close modal with Escape key.
    */
   useEffect(() => {
     if (!open) {
@@ -136,8 +145,7 @@ export default function QRModal({
   }, [open]);
 
   /*
-   * Copy the EXACT same URL contained
-   * inside the QR code.
+   * Copy the EXACT same URL used by the QR code.
    */
   const handleCopy = async () => {
     if (!frontendShareLink) {

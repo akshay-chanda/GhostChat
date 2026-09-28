@@ -15,14 +15,15 @@ import QRModal from '../components/room/QRModal';
  * CreateRoomForm navigates here with the newly created
  * room details in router state after successful creation.
  *
- * Expected createdRoom structure:
- * {
- *   roomId,
- *   password,
- *   shareLink,
- *   sessionId,
- *   anonymousName
- * }
+ * The QR invitation is generated entirely on the
+ * frontend using:
+ *
+ *   window.location.origin
+ *   roomId
+ *   password
+ *
+ * The backend Render shareLink is NOT used for QR
+ * codes or QR "Copy link".
  */
 export default function CreateRoomPage() {
   const location = useLocation();
@@ -94,7 +95,6 @@ export default function CreateRoomPage() {
               <RoomCreatedCard
                 roomId={createdRoom.roomId}
                 password={createdRoom.password}
-                shareLink={createdRoom.shareLink}
                 sessionId={createdRoom.sessionId}
                 anonymousName={
                   createdRoom.anonymousName
@@ -106,12 +106,22 @@ export default function CreateRoomPage() {
 
             {/* ------------------------------------------
                 QR Modal
+
+                IMPORTANT:
+                No shareLink is passed here.
+
+                QRModal creates the invitation URL from:
+                  - window.location.origin
+                  - roomId
+                  - password
+
+                Therefore the Render backend URL cannot
+                be used by the QR Copy Link button.
             ------------------------------------------ */}
 
             <QRModal
               open={qrOpen}
               onClose={handleCloseQr}
-              shareLink={createdRoom.shareLink}
               roomId={createdRoom.roomId}
               password={createdRoom.password}
             />
