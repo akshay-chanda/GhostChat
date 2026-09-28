@@ -70,7 +70,12 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
   return (
     <form
       onSubmit={handleSubmit}
-      className="w-full max-w-sm"
+      className="
+        mx-auto
+        w-full
+        max-w-sm
+        min-w-0
+      "
     >
       {/* Heading */}
 
@@ -98,10 +103,15 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
         </p>
       </div>
 
-      {/* Form fields */}
+      {/* Form */}
 
-      <div className="mt-8 space-y-5">
-
+      <div
+        className="
+          mt-6
+          space-y-5
+          xs:mt-8
+        "
+      >
         {/* Room ID */}
 
         <div>
@@ -126,7 +136,7 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
             }
             required
             autoComplete="off"
-            placeholder="Enter room ID"
+            placeholder="7F3K9A2M"
             className="
               min-h-11
               w-full
@@ -136,17 +146,14 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
               bg-[#111827]
               px-3.5
               py-2.5
-              font-mono
-              text-sm
-              tracking-wide
+              text-base
               text-[#F8FAFC]
-              placeholder:font-sans
-              placeholder:tracking-normal
               placeholder:text-[#94A3B8]/60
               focus:border-transparent
               focus:outline-none
               focus-visible:ring-2
               focus-visible:ring-[#00D9FF]
+              sm:text-sm
             "
           />
         </div>
@@ -155,7 +162,7 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
 
         <div>
           <label
-            htmlFor="roomPassword"
+            htmlFor="joinPassword"
             className="
               mb-1.5
               block
@@ -163,11 +170,11 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
               text-[#F8FAFC]
             "
           >
-            Room password
+            Password
           </label>
 
           <input
-            id="roomPassword"
+            id="joinPassword"
             type="password"
             value={password}
             onChange={(e) =>
@@ -175,7 +182,7 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
             }
             required
             autoComplete="current-password"
-            placeholder="Enter room password"
+            placeholder="••••••••"
             className="
               min-h-11
               w-full
@@ -185,13 +192,14 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
               bg-[#111827]
               px-3.5
               py-2.5
-              text-sm
+              text-base
               text-[#F8FAFC]
               placeholder:text-[#94A3B8]/60
               focus:border-transparent
               focus:outline-none
               focus-visible:ring-2
               focus-visible:ring-[#00D9FF]
+              sm:text-sm
             "
           />
         </div>
@@ -202,6 +210,12 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
           <p
             role="alert"
             className="
+              rounded-lg
+              border
+              border-[#EF4444]/20
+              bg-[#EF4444]/5
+              px-3
+              py-2.5
               text-sm
               leading-5
               text-[#EF4444]
@@ -242,7 +256,7 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
           "
         >
           {submitting
-            ? 'Joining room…'
+            ? 'Joining…'
             : 'Join secure room'}
         </button>
       </div>
