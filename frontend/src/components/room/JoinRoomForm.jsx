@@ -11,8 +11,10 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
-  // Automatically fill Room ID and Password from
-  // Share Link / Copy Link / QR code
+  /*
+   * Automatically fill Room ID and Password
+   * from Share Link / Copy Link / QR code.
+   */
   useEffect(() => {
     const roomFromUrl = searchParams.get('room');
     const passwordFromUrl = searchParams.get('password');
@@ -66,14 +68,51 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="w-full">
-      <div className="space-y-5">
+    <form
+      onSubmit={handleSubmit}
+      className="w-full max-w-sm"
+    >
+      {/* Heading */}
+
+      <div>
+        <h1
+          className="
+            text-2xl
+            font-semibold
+            tracking-tight
+            text-[#F8FAFC]
+          "
+        >
+          Join a room
+        </h1>
+
+        <p
+          className="
+            mt-2
+            text-sm
+            leading-6
+            text-[#94A3B8]
+          "
+        >
+          No account required. Your identity stays anonymous.
+        </p>
+      </div>
+
+      {/* Form fields */}
+
+      <div className="mt-8 space-y-5">
 
         {/* Room ID */}
+
         <div>
           <label
             htmlFor="roomId"
-            className="mb-1.5 block text-sm text-[#F8FAFC]"
+            className="
+              mb-1.5
+              block
+              text-sm
+              text-[#F8FAFC]
+            "
           >
             Room ID
           </label>
@@ -97,23 +136,32 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
               bg-[#111827]
               px-3.5
               py-2.5
-              text-base
+              font-mono
+              text-sm
+              tracking-wide
               text-[#F8FAFC]
+              placeholder:font-sans
+              placeholder:tracking-normal
               placeholder:text-[#94A3B8]/60
               focus:border-transparent
               focus:outline-none
               focus-visible:ring-2
               focus-visible:ring-[#00D9FF]
-              sm:text-sm
             "
           />
         </div>
 
         {/* Password */}
+
         <div>
           <label
             htmlFor="roomPassword"
-            className="mb-1.5 block text-sm text-[#F8FAFC]"
+            className="
+              mb-1.5
+              block
+              text-sm
+              text-[#F8FAFC]
+            "
           >
             Room password
           </label>
@@ -122,7 +170,9 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
             id="roomPassword"
             type="password"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) =>
+              setPassword(e.target.value)
+            }
             required
             autoComplete="current-password"
             placeholder="Enter room password"
@@ -135,29 +185,23 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
               bg-[#111827]
               px-3.5
               py-2.5
-              text-base
+              text-sm
               text-[#F8FAFC]
               placeholder:text-[#94A3B8]/60
               focus:border-transparent
               focus:outline-none
               focus-visible:ring-2
               focus-visible:ring-[#00D9FF]
-              sm:text-sm
             "
           />
         </div>
 
         {/* Error */}
+
         {error && (
           <p
             role="alert"
             className="
-              rounded-lg
-              border
-              border-[#EF4444]/20
-              bg-[#EF4444]/5
-              px-3
-              py-2.5
               text-sm
               leading-5
               text-[#EF4444]
@@ -168,6 +212,7 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
         )}
 
         {/* Submit */}
+
         <button
           type="submit"
           disabled={submitting}
@@ -196,9 +241,10 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
             touch-manipulation
           "
         >
-          {submitting ? 'Joining room…' : 'Join room'}
+          {submitting
+            ? 'Joining room…'
+            : 'Join secure room'}
         </button>
-
       </div>
     </form>
   );
