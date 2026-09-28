@@ -22,7 +22,7 @@ import { RECONNECT_MAX_ATTEMPTS } from '../utils/constants';
  * needs a reason to run again once that's no longer true.
  */
 export function useReconnect(ready) {
-  const [connectionState, setConnectionState] = useState('connected');
+  const [connectionState, setConnectionState] = useState('reconnecting');
   const [attempts, setAttempts] = useState(0);
   const [gaveUp, setGaveUp] = useState(false);
 

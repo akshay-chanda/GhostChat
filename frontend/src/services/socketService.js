@@ -1,4 +1,3 @@
-
 import { io } from 'socket.io-client';
 
 import { SOCKET_URL } from '../utils/constants';
@@ -21,6 +20,10 @@ export function connectSocket({ roomId, sessionId, key }) {
   ) {
     roomKey = key;
 
+    /*
+     * If the browser temporarily disconnected while the user
+     * was using a file picker/viewer, reconnect the existing socket.
+     */
     if (!socket.connected && !socket.active) {
       socket.connect();
     }
@@ -28,7 +31,9 @@ export function connectSocket({ roomId, sessionId, key }) {
     return socket;
   }
 
-  // Close any previous socket
+  /*
+   * Close any previous socket.
+   */
   if (socket) {
     socket.removeAllListeners();
     socket.disconnect();
@@ -49,13 +54,40 @@ export function connectSocket({ roomId, sessionId, key }) {
 
     transports: ['websocket'],
 
-    // Do not reconnect automatically after disconnect
-    reconnection: false,
+    /*
+     * IMPORTANT:
+     * Allow Socket.IO to reconnect after temporary mobile
+     * background/network interruptions.
+     */
+    reconnection: true,
+
+    /*
+     * Keep retrying instead of permanently giving up.
+     */
+    reconnectionAttempts: Infinity,
+
+    /*
+     * Start retrying after 1 second.
+     */
+    reconnectionDelay: 1000,
+
+    /*
+     * Do not wait longer than 5 seconds between retries.
+     */
+    reconnectionDelayMax: 5000,
+
+    /*
+     * Small randomization prevents synchronized reconnects.
+     */
+    randomizationFactor: 0.5,
 
     autoConnect: true,
 
-    // Close socket when browser page is unloaded
-    closeOnBeforeunload: true,
+    /*
+     * Do not force-close the socket just because the browser
+     * temporarily changes lifecycle state.
+     */
+    closeOnBeforeunload: false,
   });
 
   socket.on('connect', () => {
@@ -67,19 +99,21 @@ export function connectSocket({ roomId, sessionId, key }) {
   socket.on('connect_error', (error) => {
     console.error(
       'Socket connection error:',
-      error.message
+      error?.message || error
     );
 
-    // Notify frontend if session is invalid
-    if (
-      error.message?.toLowerCase().includes('session') ||
-      error.message?.toLowerCase().includes('room') ||
-      error.message?.toLowerCase().includes('unauthorized')
-    ) {
-      socket?.emit('connection:error', {
-        message: error.message,
-      });
-    }
+    /*
+     * IMPORTANT:
+     * Do NOT immediately redirect to Home here.
+     *
+     * A connect_error can be temporary on mobile when:
+     * - opening the file picker
+     * - opening a file viewer
+     * - switching apps
+     * - losing Wi-Fi/mobile data briefly
+     *
+     * Socket.IO will automatically retry.
+     */
   });
 
   socket.on('disconnect', (reason) => {
@@ -131,9 +165,34 @@ export function getSocket() {
 }
 
 /**
+ * Reconnect the existing socket.
+ *
+ * This is useful when a mobile browser returns from:
+ * - file picker
+ * - file viewer
+ * - another application
+ * - temporary network interruption
+ */
+export function reconnectSocket() {
+  if (!socket) {
+    return;
+  }
+
+  if (socket.connected) {
+    return;
+  }
+
+  console.log(
+    '[socketService] Attempting to reconnect socket'
+  );
+
+  socket.connect();
+}
+
+/**
  * Wait until socket is connected
  */
-function waitForConnection(timeout = 10000) {
+function waitForConnection(timeout = 15000) {
   return new Promise((resolve, reject) => {
     if (!socket) {
       reject(
@@ -187,16 +246,16 @@ function waitForConnection(timeout = 10000) {
 
     const handleError = (error) => {
       console.error(
-        'Connection failed:',
-        error.message
+        'Connection failed while waiting:',
+        error?.message || error
       );
 
-      finishReject(
-        new Error(
-          error.message ||
-          'Socket connection failed'
-        )
-      );
+      /*
+       * Do not immediately fail because Socket.IO may still
+       * be reconnecting.
+       *
+       * The timeout below is what ultimately stops the wait.
+       */
     };
 
     timer = setTimeout(() => {
@@ -208,7 +267,7 @@ function waitForConnection(timeout = 10000) {
     }, timeout);
 
     socket.once('connect', handleConnect);
-    socket.once('connect_error', handleError);
+    socket.on('connect_error', handleError);
 
     if (!socket.connected && !socket.active) {
       socket.connect();
@@ -298,7 +357,6 @@ export function onMessage(callback) {
   }
 
   const handler = async (payload) => {
-    // Validate payload
     if (!payload || typeof payload !== 'object') {
       console.warn(
         'Invalid message payload:',
@@ -308,14 +366,11 @@ export function onMessage(callback) {
       return;
     }
 
-    // System messages do not require decryption
     if (payload.type === 'system') {
       callback(payload);
-
       return;
     }
 
-    // File messages do not require text decryption
     if (payload.type === 'file') {
       callback({
         ...payload,
@@ -332,7 +387,6 @@ export function onMessage(callback) {
         );
       }
 
-      // Validate encrypted message fields
       if (
         typeof payload.ciphertext !== 'string' ||
         typeof payload.iv !== 'string' ||
@@ -344,7 +398,6 @@ export function onMessage(callback) {
         );
       }
 
-      // Decrypt normal text message
       const content =
         await decryptMessage(
           {
