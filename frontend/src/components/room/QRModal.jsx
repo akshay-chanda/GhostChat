@@ -13,18 +13,9 @@ export default function QRModal({
   const [copied, setCopied] = useState(false);
 
   /*
-   * IMPORTANT:
-   *
-   * We NEVER use the backend Render shareLink here.
-   *
-   * The invitation URL is always generated from:
-   *
-   *   window.location.origin
-   *   roomId
-   *   password
+   * The invitation URL is generated from the frontend.
    *
    * Example:
-   *
    * https://ghost-chat-akshay.vercel.app/join?room=ABC123&password=hello123
    */
   const frontendShareLink = useMemo(() => {
@@ -60,9 +51,6 @@ export default function QRModal({
 
   /*
    * Generate QR code.
-   *
-   * The QR code contains the exact same URL
-   * that is shown and copied below.
    */
   useEffect(() => {
     if (
@@ -145,7 +133,7 @@ export default function QRModal({
   }, [open]);
 
   /*
-   * Copy the EXACT same URL used by the QR code.
+   * Copy the same URL used by the QR code.
    */
   const handleCopy = async () => {
     if (!frontendShareLink) {
@@ -361,66 +349,6 @@ export default function QRModal({
           Scan this QR code to automatically
           fill the Room ID and password.
         </p>
-
-        {/* Room ID */}
-
-        {roomId && (
-          <div
-            className="
-              mt-4
-              rounded-lg
-              border border-white/5
-              bg-[#0B0F14]
-              px-3
-              py-2.5
-            "
-          >
-            <p className="text-xs text-[#94A3B8]">
-              Room ID
-            </p>
-
-            <p
-              className="
-                mt-0.5
-                truncate
-                font-mono
-                text-sm
-                tracking-wide
-                text-[#F8FAFC]
-              "
-            >
-              {roomId}
-            </p>
-          </div>
-        )}
-
-        {/* Invitation link */}
-
-        {frontendShareLink && (
-          <div
-            className="
-              mt-3
-              rounded-lg
-              border border-white/5
-              bg-[#0B0F14]
-              px-3
-              py-2.5
-            "
-          >
-
-            <p
-              className="
-                mt-1
-                break-all
-                text-[11px]
-                leading-4
-                text-[#64748B]
-              "
-            >
-              {frontendShareLink}
-            </p>
-          </div>
-        )}
 
         {/* Copy Link */}
 
