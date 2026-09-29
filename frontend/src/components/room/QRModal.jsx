@@ -407,9 +407,6 @@ export default function QRModal({
               py-2.5
             "
           >
-            <p className="text-xs text-[#94A3B8]">
-              Invitation link
-            </p>
 
             <p
               className="
