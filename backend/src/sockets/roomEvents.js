@@ -34,7 +34,11 @@ function markRoomAsDestroyed(io, roomId) {
 /**
  * Find a socket by room ID and session ID
  */
-function findParticipantSocket(io, roomId, sessionId) {
+function findParticipantSocket(
+  io,
+  roomId,
+  sessionId
+) {
   return [...io.sockets.sockets.values()].find(
     (clientSocket) =>
       clientSocket.data.roomId === roomId &&
@@ -67,7 +71,10 @@ function registerRoomEvents(io, socket) {
         roomManager.getPublicRoomInfo(roomId)
       );
     } catch (error) {
-      emitError(socket, error.message);
+      emitError(
+        socket,
+        error.message
+      );
     }
   });
 
@@ -87,7 +94,10 @@ function registerRoomEvents(io, socket) {
         roomManager.getPublicRoomInfo(roomId)
       );
     } catch (error) {
-      emitError(socket, error.message);
+      emitError(
+        socket,
+        error.message
+      );
     }
   });
 
@@ -109,7 +119,10 @@ function registerRoomEvents(io, socket) {
           roomManager.getPublicRoomInfo(roomId)
         );
       } catch (error) {
-        emitError(socket, error.message);
+        emitError(
+          socket,
+          error.message
+        );
       }
     }
   );
@@ -132,7 +145,10 @@ function registerRoomEvents(io, socket) {
           roomManager.getPublicRoomInfo(roomId)
         );
       } catch (error) {
-        emitError(socket, error.message);
+        emitError(
+          socket,
+          error.message
+        );
       }
     }
   );
@@ -155,7 +171,10 @@ function registerRoomEvents(io, socket) {
           roomManager.getPublicRoomInfo(roomId)
         );
       } catch (error) {
-        emitError(socket, error.message);
+        emitError(
+          socket,
+          error.message
+        );
       }
     }
   );
@@ -178,7 +197,10 @@ function registerRoomEvents(io, socket) {
           roomManager.getPublicRoomInfo(roomId)
         );
       } catch (error) {
-        emitError(socket, error.message);
+        emitError(
+          socket,
+          error.message
+        );
       }
     }
   );
@@ -198,10 +220,11 @@ function registerRoomEvents(io, socket) {
           );
         }
 
-        const target = sessionManager.validateSession(
-          roomId,
-          targetSessionId
-        );
+        const target =
+          sessionManager.validateSession(
+            roomId,
+            targetSessionId
+          );
 
         roomManager.removeParticipant(
           roomId,
@@ -217,9 +240,10 @@ function registerRoomEvents(io, socket) {
         );
 
         if (target) {
-          const removedNotice = createSystemMessage(
-            `${target.anonymousName} was removed from the room.`
-          );
+          const removedNotice =
+            createSystemMessage(
+              `${target.anonymousName} was removed from the room.`
+            );
 
           store.addMessage(
             roomId,
@@ -232,25 +256,34 @@ function registerRoomEvents(io, socket) {
           );
         }
 
-        const targetSocket = findParticipantSocket(
-          io,
-          roomId,
-          targetSessionId
-        );
+        const targetSocket =
+          findParticipantSocket(
+            io,
+            roomId,
+            targetSessionId
+          );
 
         if (targetSocket) {
           /*
            * This is a real removal, not a temporary
            * mobile/browser disconnect.
            */
-          targetSocket.data.suppressLeaveEvent = true;
+          targetSocket.data.suppressLeaveEvent =
+            true;
 
-          targetSocket.emit('room:removed');
+          targetSocket.emit(
+            'room:removed'
+          );
 
-          targetSocket.disconnect(true);
+          targetSocket.disconnect(
+            true
+          );
         }
       } catch (error) {
-        emitError(socket, error.message);
+        emitError(
+          socket,
+          error.message
+        );
       }
     }
   );
@@ -258,38 +291,121 @@ function registerRoomEvents(io, socket) {
   /**
    * Explicitly destroy room
    *
+   * IMPORTANT:
+   *
    * This is the ONLY normal socket action that
    * destroys the entire room.
+   *
+   * The frontend sends a Socket.IO acknowledgement
+   * callback. We call that callback after the room
+   * has been successfully destroyed and the
+   * room:expired event has been sent.
    */
-  socket.on('room:destroy', () => {
-    try {
-      roomManager.destroyRoom(
-        roomId,
-        sessionId
-      );
+  socket.on(
+    'room:destroy',
+    (ack) => {
+      try {
+        /*
+         * Only the room owner can destroy the
+         * entire room.
+         */
+        if (!socket.data.isOwner) {
+          const message =
+            'Only the room owner can destroy the room.';
 
-      markRoomAsDestroyed(
-        io,
-        roomId
-      );
+          if (typeof ack === 'function') {
+            ack({
+              ok: false,
+              message,
+            });
+          }
 
-      io.to(roomId).emit(
-        'room:expired'
-      );
+          emitError(
+            socket,
+            message
+          );
 
-      io.in(roomId).disconnectSockets(true);
-
-      logger.info(
-        'Room explicitly destroyed',
-        {
-          roomId,
-          sessionId,
+          return;
         }
-      );
-    } catch (error) {
-      emitError(socket, error.message);
+
+        /*
+         * Destroy the room in the backend first.
+         */
+        roomManager.destroyRoom(
+          roomId,
+          sessionId
+        );
+
+        /*
+         * Mark every socket in this room as
+         * already destroyed.
+         */
+        markRoomAsDestroyed(
+          io,
+          roomId
+        );
+
+        /*
+         * Tell EVERYONE that the room has been
+         * permanently destroyed.
+         */
+        io.to(roomId).emit(
+          'room:expired'
+        );
+
+        /*
+         * IMPORTANT:
+         *
+         * Confirm the destruction to the host
+         * before disconnecting the sockets.
+         *
+         * The updated socketService.js waits for
+         * this acknowledgement.
+         */
+        if (typeof ack === 'function') {
+          ack({
+            ok: true,
+          });
+        }
+
+        /*
+         * Now disconnect everybody.
+         */
+        io.in(roomId).disconnectSockets(
+          true
+        );
+
+        logger.info(
+          'Room explicitly destroyed',
+          {
+            roomId,
+            sessionId,
+          }
+        );
+      } catch (error) {
+        logger.error(
+          'Failed to destroy room',
+          {
+            roomId,
+            sessionId,
+            error: error.message,
+          }
+        );
+
+        if (typeof ack === 'function') {
+          ack({
+            ok: false,
+            message: error.message,
+          });
+        }
+
+        emitError(
+          socket,
+          error.message
+        );
+      }
     }
-  });
+  );
 
   /**
    * Explicit leave room
@@ -303,101 +419,109 @@ function registerRoomEvents(io, socket) {
    * temporarily disconnect when opening file viewers,
    * file pickers, other applications, etc.
    */
-  socket.on('room:leave', () => {
-    try {
-      if (socket.data.intentionalLeave) {
-        return;
-      }
+  socket.on(
+    'room:leave',
+    () => {
+      try {
+        if (
+          socket.data.intentionalLeave
+        ) {
+          return;
+        }
 
-      socket.data.intentionalLeave = true;
+        socket.data.intentionalLeave =
+          true;
 
-      /*
-       * Owner explicitly leaving:
-       *
-       * Keep the existing GhostChat behavior where the
-       * owner's intentional leave destroys the room.
-       */
-      if (socket.data.isOwner) {
-        roomManager.destroyRoom(
+        /*
+         * Owner explicitly leaving:
+         *
+         * Keep the existing GhostChat behavior where
+         * the owner's intentional leave destroys the room.
+         */
+        if (socket.data.isOwner) {
+          roomManager.destroyRoom(
+            roomId,
+            sessionId
+          );
+
+          markRoomAsDestroyed(
+            io,
+            roomId
+          );
+
+          io.to(roomId).emit(
+            'room:expired'
+          );
+
+          io.in(roomId).disconnectSockets(
+            true
+          );
+
+          logger.info(
+            'Owner explicitly left - room destroyed',
+            {
+              roomId,
+              sessionId,
+            }
+          );
+
+          return;
+        }
+
+        /*
+         * Normal participant explicitly leaves.
+         */
+        sessionManager.destroySession(
           roomId,
           sessionId
         );
 
-        markRoomAsDestroyed(
-          io,
-          roomId
+        socket.to(roomId).emit(
+          'room:user-left',
+          {
+            id: sessionId,
+          }
         );
 
-        io.to(roomId).emit(
-          'room:expired'
-        );
+        const leavingName =
+          socket.data.anonymousName;
 
-        io.in(roomId).disconnectSockets(true);
+        if (leavingName) {
+          const leaveNotice =
+            createSystemMessage(
+              `${leavingName} left the room.`
+            );
+
+          store.addMessage(
+            roomId,
+            leaveNotice
+          );
+
+          socket.to(roomId).emit(
+            'message:new',
+            leaveNotice
+          );
+        }
 
         logger.info(
-          'Owner explicitly left - room destroyed',
+          'Participant explicitly left',
           {
             roomId,
             sessionId,
           }
         );
-
-        return;
-      }
-
-      /*
-       * Normal participant explicitly leaves.
-       */
-      sessionManager.destroySession(
-        roomId,
-        sessionId
-      );
-
-      socket.to(roomId).emit(
-        'room:user-left',
-        {
-          id: sessionId,
-        }
-      );
-
-      const leavingName =
-        socket.data.anonymousName;
-
-      if (leavingName) {
-        const leaveNotice =
-          createSystemMessage(
-            `${leavingName} left the room.`
-          );
-
-        store.addMessage(
-          roomId,
-          leaveNotice
-        );
-
-        socket.to(roomId).emit(
-          'message:new',
-          leaveNotice
+      } catch (error) {
+        logger.warn(
+          'Failed to process explicit room leave',
+          {
+            roomId,
+            sessionId,
+            error: error.message,
+          }
         );
       }
-
-      logger.info(
-        'Participant explicitly left',
-        {
-          roomId,
-          sessionId,
-        }
-      );
-    } catch (error) {
-      logger.warn(
-        'Failed to process explicit room leave',
-        {
-          roomId,
-          sessionId,
-          error: error.message,
-        }
-      );
     }
-  });
+  );
 
   /**
    * Handle socket disconnecting
@@ -419,29 +543,35 @@ function registerRoomEvents(io, socket) {
    *
    * Therefore the session must remain in memory.
    */
-  socket.on('disconnecting', () => {
-    logger.info(
-      'Socket temporarily disconnected',
-      {
-        roomId,
-        sessionId,
-        isOwner: socket.data.isOwner,
-        reason: socket.data.disconnectReason || 'unknown',
-      }
-    );
+  socket.on(
+    'disconnecting',
+    () => {
+      logger.info(
+        'Socket temporarily disconnected',
+        {
+          roomId,
+          sessionId,
+          isOwner:
+            socket.data.isOwner,
+          reason:
+            socket.data.disconnectReason ||
+            'unknown',
+        }
+      );
 
-    /*
-     * Intentionally do NOTHING else here.
-     *
-     * In particular:
-     *
-     * - do NOT destroy the room
-     * - do NOT destroy the session
-     * - do NOT emit room:expired
-     * - do NOT emit room:removed
-     * - do NOT remove the participant
-     */
-  });
+      /*
+       * Intentionally do NOTHING else here.
+       *
+       * In particular:
+       *
+       * - do NOT destroy the room
+       * - do NOT destroy the session
+       * - do NOT emit room:expired
+       * - do NOT emit room:removed
+       * - do NOT remove the participant
+       */
+    }
+  );
 }
 
 module.exports = registerRoomEvents;

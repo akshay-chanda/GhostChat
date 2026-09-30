@@ -53,7 +53,8 @@ export function RoomProvider({
   const [participants, setParticipants] = useState([]);
   const [messages, setMessages] = useState([]);
   const [replyTo, setReplyTo] = useState(null);
-  const [uploadProgress, setUploadProgress] = useState(null);
+  const [uploadProgress, setUploadProgress] =
+    useState(null);
 
   // --------------------------------------------------
   // Reset room state
@@ -166,13 +167,16 @@ export function RoomProvider({
           null;
 
         // Find the original message.
-        const originalMessage = replyToMessageId
-          ? previousMessages.find(
-              (message) =>
-                message.id === replyToMessageId ||
-                message.clientId === replyToMessageId
-            )
-          : null;
+        const originalMessage =
+          replyToMessageId
+            ? previousMessages.find(
+                (message) =>
+                  message.id ===
+                    replyToMessageId ||
+                  message.clientId ===
+                    replyToMessageId
+              )
+            : null;
 
         // Create the updated incoming message.
         const updatedIncomingMessage = {
@@ -182,7 +186,8 @@ export function RoomProvider({
           // the reply preview.
           replyTo: originalMessage
             ? {
-                messageId: originalMessage.id,
+                messageId:
+                  originalMessage.id,
                 senderName:
                   originalMessage.senderName,
                 content:
@@ -241,7 +246,8 @@ export function RoomProvider({
             const alreadyExists =
               previousParticipants.some(
                 (item) =>
-                  item.id === participant.id
+                  item.id ===
+                  participant.id
               );
 
             if (alreadyExists) {
@@ -284,10 +290,13 @@ export function RoomProvider({
       'room:joined',
       ({
         room: initialRoom,
-        participants: initialParticipants,
+        participants:
+          initialParticipants,
       }) => {
         setRoom(initialRoom);
-        setParticipants(initialParticipants);
+        setParticipants(
+          initialParticipants
+        );
       }
     );
 
@@ -313,7 +322,13 @@ export function RoomProvider({
       }
     );
 
-    // Room expired or host disconnected.
+    /*
+     * Room expired or host explicitly
+     * destroyed the room.
+     *
+     * The backend sends this event to
+     * everyone in the room.
+     */
     const offExpired = on(
       'room:expired',
       () => {
@@ -471,18 +486,62 @@ export function RoomProvider({
     emitUnlockRoom();
   }, []);
 
-  const handleDestroyRoom = useCallback(() => {
-    emitDestroyRoom();
-  }, []);
+  /*
+   * IMPORTANT:
+   *
+   * Wait for the backend to confirm that the
+   * room was successfully destroyed.
+   *
+   * The backend also sends room:expired to
+   * everyone, including the host.
+   */
+  const handleDestroyRoom =
+    useCallback(async () => {
+      try {
+        await emitDestroyRoom();
+
+        console.log(
+          '[RoomContext] Room destruction confirmed'
+        );
+
+        /*
+         * Do NOT manually navigate here.
+         *
+         * The backend sends room:expired,
+         * which is handled above by offExpired.
+         *
+         * This prevents duplicate navigation
+         * and gives all participants the same
+         * room-closed flow.
+         */
+      } catch (error) {
+        console.error(
+          '[RoomContext] Failed to destroy room:',
+          error
+        );
+
+        /*
+         * Keep the user in the room if the
+         * server did not confirm destruction.
+         *
+         * This prevents the host from leaving
+         * while the room is still active.
+         */
+      }
+    }, []);
 
   const handleSetAcceptingNewMembers =
     useCallback((enabled) => {
-      emitSetAcceptingNewMembers(enabled);
+      emitSetAcceptingNewMembers(
+        enabled
+      );
     }, []);
 
   const handleSetFileSharingEnabled =
     useCallback((enabled) => {
-      emitSetFileSharingEnabled(enabled);
+      emitSetFileSharingEnabled(
+        enabled
+      );
     }, []);
 
   const handleSetMaxParticipants =
@@ -514,79 +573,48 @@ export function RoomProvider({
   // --------------------------------------------------
 
   const value = {
-    // ------------------------------------------------
     // Room identity
-    // ------------------------------------------------
-
     roomId,
     sessionId,
 
-    // ------------------------------------------------
     // Encryption
-    // ------------------------------------------------
-    //
-    // IMPORTANT:
-    // MessageBubble uses this same key to decrypt
-    // downloaded files.
-
     roomKey,
 
-    // ------------------------------------------------
     // Room state
-    // ------------------------------------------------
-
     room,
     participants,
     messages,
 
-    // ------------------------------------------------
     // Connection
-    // ------------------------------------------------
-
     typingUsers,
     connectionState,
     retryConnection,
 
-    // ------------------------------------------------
     // Replies
-    // ------------------------------------------------
-
     replyTo,
     setReplyTo,
 
-    // ------------------------------------------------
     // Messages
-    // ------------------------------------------------
-
     sendMessage,
     deleteMessage,
 
-    // ------------------------------------------------
     // Files
-    // ------------------------------------------------
-
     sendFile,
     uploadProgress,
 
-    // ------------------------------------------------
     // Typing
-    // ------------------------------------------------
-
     startTyping,
     stopTyping,
 
-    // ------------------------------------------------
     // Ownership
-    // ------------------------------------------------
-
     isOwner,
 
-    // ------------------------------------------------
     // Room controls
-    // ------------------------------------------------
+    lockRoom:
+      handleLockRoom,
 
-    lockRoom: handleLockRoom,
-    unlockRoom: handleUnlockRoom,
+    unlockRoom:
+      handleUnlockRoom,
 
     setAcceptingNewMembers:
       handleSetAcceptingNewMembers,
@@ -609,21 +637,18 @@ export function RoomProvider({
     clearMessages:
       handleClearMessages,
 
-    // ------------------------------------------------
     // Leave
-    // ------------------------------------------------
+    leaveRoom:
+      handleLeaveRoom,
 
-    leaveRoom: handleLeaveRoom,
-
-    // ------------------------------------------------
     // Ready
-    // ------------------------------------------------
-
     ready: Boolean(roomKey),
   };
 
   return (
-    <RoomContext.Provider value={value}>
+    <RoomContext.Provider
+      value={value}
+    >
       {children}
     </RoomContext.Provider>
   );
@@ -634,7 +659,8 @@ export function RoomProvider({
 // --------------------------------------------------
 
 export function useRoom() {
-  const context = useContext(RoomContext);
+  const context =
+    useContext(RoomContext);
 
   if (!context) {
     throw new Error(
