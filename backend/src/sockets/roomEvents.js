@@ -296,10 +296,8 @@ function registerRoomEvents(io, socket) {
    * This is the ONLY normal socket action that
    * destroys the entire room.
    *
-   * The frontend sends a Socket.IO acknowledgement
-   * callback. We call that callback after the room
-   * has been successfully destroyed and the
-   * room:expired event has been sent.
+   * A normal socket disconnect does NOT destroy
+   * the room.
    */
   socket.on(
     'room:destroy',
@@ -329,7 +327,23 @@ function registerRoomEvents(io, socket) {
         }
 
         /*
-         * Destroy the room in the backend first.
+         * Prevent duplicate destroy requests.
+         */
+        if (socket.data.roomAlreadyDestroyed) {
+          if (typeof ack === 'function') {
+            ack({
+              ok: true,
+              alreadyDestroyed: true,
+            });
+          }
+
+          return;
+        }
+
+        /*
+         * 1. Destroy the room in backend memory FIRST.
+         *
+         * After this succeeds, the room no longer exists.
          */
         roomManager.destroyRoom(
           roomId,
@@ -337,7 +351,7 @@ function registerRoomEvents(io, socket) {
         );
 
         /*
-         * Mark every socket in this room as
+         * 2. Mark every socket in this room as
          * already destroyed.
          */
         markRoomAsDestroyed(
@@ -346,20 +360,9 @@ function registerRoomEvents(io, socket) {
         );
 
         /*
-         * Tell EVERYONE that the room has been
-         * permanently destroyed.
-         */
-        io.to(roomId).emit(
-          'room:expired'
-        );
-
-        /*
-         * IMPORTANT:
+         * 3. Confirm destruction to the host FIRST.
          *
-         * Confirm the destruction to the host
-         * before disconnecting the sockets.
-         *
-         * The updated socketService.js waits for
+         * socketService.destroyRoom() waits for
          * this acknowledgement.
          */
         if (typeof ack === 'function') {
@@ -369,11 +372,34 @@ function registerRoomEvents(io, socket) {
         }
 
         /*
-         * Now disconnect everybody.
+         * 4. Tell EVERYONE that the room has
+         * permanently expired/destroyed.
          */
-        io.in(roomId).disconnectSockets(
-          true
+        io.to(roomId).emit(
+          'room:expired'
         );
+
+        /*
+         * 5. Give the room:expired event a moment
+         * to reach all clients before forcibly
+         * disconnecting their sockets.
+         */
+        setTimeout(() => {
+          try {
+            io.in(roomId).disconnectSockets(
+              true
+            );
+          } catch (disconnectError) {
+            logger.warn(
+              'Failed to disconnect destroyed room sockets',
+              {
+                roomId,
+                error:
+                  disconnectError.message,
+              }
+            );
+          }
+        }, 500);
 
         logger.info(
           'Room explicitly destroyed',
@@ -414,8 +440,8 @@ function registerRoomEvents(io, socket) {
    *
    * We use a separate event for an intentional leave.
    *
-   * A normal WebSocket disconnect is NOT treated as
-   * leaving the room because mobile browsers can
+   * A normal WebSocket disconnect is NOT treated
+   * as leaving the room because mobile browsers can
    * temporarily disconnect when opening file viewers,
    * file pickers, other applications, etc.
    */
