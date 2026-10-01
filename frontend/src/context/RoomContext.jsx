@@ -69,7 +69,19 @@ export function RoomProvider({
   }, []);
 
   // --------------------------------------------------
-  // Navigate to Home
+  // Room closed completely
+  //
+  // IMPORTANT:
+  //
+  // This is ONLY used for:
+  //
+  // 1. Host reload / disconnect
+  // 2. Host destroys room
+  // 3. Room expires
+  // 4. Current participant is removed by host
+  //
+  // A normal participant leaving/reloading MUST NOT
+  // call this function.
   // --------------------------------------------------
 
   const leaveRoomAndGoHome = useCallback(() => {
@@ -100,7 +112,6 @@ export function RoomProvider({
       return undefined;
     }
 
-    // Clear the old key while deriving the new one.
     setRoomKey(null);
 
     deriveRoomKey(password, roomId)
@@ -157,15 +168,12 @@ export function RoomProvider({
 
     const cleanup = onMessage((incoming) => {
       setMessages((previousMessages) => {
-        // Get the ID of the message being replied to.
-        // Supports both possible reply formats.
         const replyToMessageId =
           incoming.replyToMessageId ??
           incoming.replyTo?.messageId ??
           incoming.replyTo?.id ??
           null;
 
-        // Find the original message.
         const originalMessage = replyToMessageId
           ? previousMessages.find(
               (message) =>
@@ -174,12 +182,9 @@ export function RoomProvider({
             )
           : null;
 
-        // Create the updated incoming message.
         const updatedIncomingMessage = {
           ...incoming,
 
-          // Attach the original message for
-          // the reply preview.
           replyTo: originalMessage
             ? {
                 messageId: originalMessage.id,
@@ -212,7 +217,6 @@ export function RoomProvider({
           );
         }
 
-        // Add the new message.
         return [
           ...previousMessages,
           updatedIncomingMessage,
@@ -232,7 +236,10 @@ export function RoomProvider({
       return undefined;
     }
 
-    // A new user joined the room.
+    // ------------------------------------------------
+    // New user joined
+    // ------------------------------------------------
+
     const offJoined = on(
       'room:user-joined',
       (participant) => {
@@ -257,7 +264,23 @@ export function RoomProvider({
       }
     );
 
-    // A user left the room.
+    // ------------------------------------------------
+    // User left
+    //
+    // IMPORTANT:
+    //
+    // DO NOT navigate anywhere here.
+    //
+    // This event is normally generated when a
+    // participant disconnects/reloads.
+    //
+    // The participant who reloaded should NOT be
+    // redirected to Home by this event.
+    //
+    // Other users simply remove that participant
+    // from their participant list.
+    // ------------------------------------------------
+
     const offLeft = on(
       'room:user-left',
       ({ id }) => {
@@ -271,7 +294,10 @@ export function RoomProvider({
       }
     );
 
-    // Room information updated.
+    // ------------------------------------------------
+    // Room updated
+    // ------------------------------------------------
+
     const offRoomUpdate = on(
       'room:updated',
       (updatedRoom) => {
@@ -279,7 +305,10 @@ export function RoomProvider({
       }
     );
 
-    // Successfully joined the room.
+    // ------------------------------------------------
+    // Successfully joined room
+    // ------------------------------------------------
+
     const offRoster = on(
       'room:joined',
       ({
@@ -291,7 +320,10 @@ export function RoomProvider({
       }
     );
 
-    // A single message was deleted.
+    // ------------------------------------------------
+    // Message deleted
+    // ------------------------------------------------
+
     const offDeleted = on(
       'message:delete',
       ({ messageId }) => {
@@ -305,7 +337,10 @@ export function RoomProvider({
       }
     );
 
-    // Messages cleared.
+    // ------------------------------------------------
+    // Messages cleared
+    // ------------------------------------------------
+
     const offCleared = on(
       'message:cleared',
       () => {
@@ -313,7 +348,20 @@ export function RoomProvider({
       }
     );
 
-    // Room expired or host disconnected.
+    // ------------------------------------------------
+    // ROOM CLOSED
+    //
+    // This is NOT a normal participant disconnect.
+    //
+    // room:expired means:
+    //
+    // - host disconnected/reloaded
+    // - host destroyed the room
+    // - room timer expired
+    //
+    // In these cases everyone goes Home.
+    // ------------------------------------------------
+
     const offExpired = on(
       'room:expired',
       () => {
@@ -321,7 +369,10 @@ export function RoomProvider({
       }
     );
 
-    // Current user was removed by the host.
+    // ------------------------------------------------
+    // CURRENT USER REMOVED BY HOST
+    // ------------------------------------------------
+
     const offRemoved = on(
       'room:removed',
       () => {
@@ -451,13 +502,31 @@ export function RoomProvider({
   );
 
   // --------------------------------------------------
-  // Leave room manually
+  // Manual leave
   // --------------------------------------------------
 
   const handleLeaveRoom = useCallback(() => {
+    /**
+     * Tell backend this is an intentional leave.
+     *
+     * Backend:
+     *
+     * HOST:
+     *   destroys room
+     *
+     * PARTICIPANT:
+     *   removes only this participant
+     */
     emitLeaveRoom();
+
+    /**
+     * The current user intentionally chose Leave.
+     * Therefore it is correct to return Home.
+     */
     leaveRoomAndGoHome();
-  }, [leaveRoomAndGoHome]);
+  }, [
+    leaveRoomAndGoHome,
+  ]);
 
   // --------------------------------------------------
   // Room controls
@@ -471,8 +540,21 @@ export function RoomProvider({
     emitUnlockRoom();
   }, []);
 
-  const handleDestroyRoom = useCallback(() => {
-    emitDestroyRoom();
+  // --------------------------------------------------
+  // Destroy room
+  // --------------------------------------------------
+
+  const handleDestroyRoom = useCallback(async () => {
+    try {
+      await emitDestroyRoom();
+    } catch (error) {
+      console.error(
+        'Failed to destroy room:',
+        error
+      );
+
+      throw error;
+    }
   }, []);
 
   const handleSetAcceptingNewMembers =
@@ -514,77 +596,43 @@ export function RoomProvider({
   // --------------------------------------------------
 
   const value = {
-    // ------------------------------------------------
     // Room identity
-    // ------------------------------------------------
-
     roomId,
     sessionId,
 
-    // ------------------------------------------------
     // Encryption
-    // ------------------------------------------------
-    //
-    // IMPORTANT:
-    // MessageBubble uses this same key to decrypt
-    // downloaded files.
-
     roomKey,
 
-    // ------------------------------------------------
     // Room state
-    // ------------------------------------------------
-
     room,
     participants,
     messages,
 
-    // ------------------------------------------------
     // Connection
-    // ------------------------------------------------
-
     typingUsers,
     connectionState,
     retryConnection,
 
-    // ------------------------------------------------
     // Replies
-    // ------------------------------------------------
-
     replyTo,
     setReplyTo,
 
-    // ------------------------------------------------
     // Messages
-    // ------------------------------------------------
-
     sendMessage,
     deleteMessage,
 
-    // ------------------------------------------------
     // Files
-    // ------------------------------------------------
-
     sendFile,
     uploadProgress,
 
-    // ------------------------------------------------
     // Typing
-    // ------------------------------------------------
-
     startTyping,
     stopTyping,
 
-    // ------------------------------------------------
     // Ownership
-    // ------------------------------------------------
-
     isOwner,
 
-    // ------------------------------------------------
     // Room controls
-    // ------------------------------------------------
-
     lockRoom: handleLockRoom,
     unlockRoom: handleUnlockRoom,
 
@@ -609,16 +657,10 @@ export function RoomProvider({
     clearMessages:
       handleClearMessages,
 
-    // ------------------------------------------------
     // Leave
-    // ------------------------------------------------
-
     leaveRoom: handleLeaveRoom,
 
-    // ------------------------------------------------
     // Ready
-    // ------------------------------------------------
-
     ready: Boolean(roomKey),
   };
 
