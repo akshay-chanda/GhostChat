@@ -18,6 +18,8 @@ import { uploadFile } from '../services/fileService';
 
 import {
   onMessage,
+  on,
+  disconnectSocket,
   leaveRoom as emitLeaveRoom,
   deleteMessage as emitDeleteMessage,
   lockRoom as emitLockRoom,
@@ -29,7 +31,6 @@ import {
   destroyRoom as emitDestroyRoom,
   removeParticipant as emitRemoveParticipant,
   clearMessages as emitClearMessages,
-  on,
 } from '../services/socketService';
 
 const RoomContext = createContext(null);
@@ -74,8 +75,26 @@ export function RoomProvider({
   // --------------------------------------------------
 
   const leaveRoomAndGoHome = useCallback(() => {
+    /*
+     * IMPORTANT:
+     *
+     * Completely destroy the client-side socket before
+     * navigating away from the room.
+     *
+     * This prevents the old Socket.IO connection from
+     * remaining alive/reconnecting and interfering with
+     * the next room.
+     */
+    disconnectSocket();
+
+    /*
+     * Clear all old room state.
+     */
     resetRoomState();
 
+    /*
+     * Navigate to the home page.
+     */
     if (onRoomClosed) {
       onRoomClosed();
     } else {
@@ -90,6 +109,20 @@ export function RoomProvider({
   ]);
 
   // --------------------------------------------------
+  // Cleanup socket when RoomProvider is unmounted
+  // --------------------------------------------------
+
+  useEffect(() => {
+    return () => {
+      /*
+       * Make sure the old socket is completely removed
+       * when leaving the room page.
+       */
+      disconnectSocket();
+    };
+  }, []);
+
+  // --------------------------------------------------
   // Derive encryption key
   // --------------------------------------------------
 
@@ -101,6 +134,10 @@ export function RoomProvider({
       return undefined;
     }
 
+    /*
+     * Clear the previous room key while the new key
+     * is being generated.
+     */
     setRoomKey(null);
 
     deriveRoomKey(password, roomId)
@@ -162,7 +199,7 @@ export function RoomProvider({
          * SYSTEM MESSAGE DUPLICATE PROTECTION
          * ------------------------------------------------
          *
-         * The backend sends:
+         * The backend can send:
          *
          *   message:new
          *
@@ -171,8 +208,7 @@ export function RoomProvider({
          * The room:user-left handler below can also
          * create a local fallback message.
          *
-         * Therefore, don't add the same system message
-         * twice.
+         * Do not add the same system message twice.
          */
         if (
           incoming.type === 'system' &&
@@ -191,14 +227,20 @@ export function RoomProvider({
           }
         }
 
-        // Get the ID of the message being replied to.
+        // ------------------------------------------------
+        // Get reply message ID
+        // ------------------------------------------------
+
         const replyToMessageId =
           incoming.replyToMessageId ??
           incoming.replyTo?.messageId ??
           incoming.replyTo?.id ??
           null;
 
-        // Find the original message.
+        // ------------------------------------------------
+        // Find original message
+        // ------------------------------------------------
+
         const originalMessage =
           replyToMessageId
             ? previousMessages.find(
@@ -210,7 +252,10 @@ export function RoomProvider({
               )
             : null;
 
-        // Create the updated incoming message.
+        // ------------------------------------------------
+        // Create updated incoming message
+        // ------------------------------------------------
+
         const updatedIncomingMessage = {
           ...incoming,
 
@@ -226,7 +271,10 @@ export function RoomProvider({
             : incoming.replyTo ?? null,
         };
 
-        // Prevent duplicate normal messages.
+        // ------------------------------------------------
+        // Prevent duplicate normal messages
+        // ------------------------------------------------
+
         if (
           incoming.clientId &&
           previousMessages.some(
@@ -247,7 +295,10 @@ export function RoomProvider({
           );
         }
 
-        // Add the new message.
+        // ------------------------------------------------
+        // Add new message
+        // ------------------------------------------------
+
         return [
           ...previousMessages,
           updatedIncomingMessage,
@@ -268,7 +319,7 @@ export function RoomProvider({
     }
 
     // ------------------------------------------------
-    // A new user joined the room.
+    // A new user joined the room
     // ------------------------------------------------
 
     const offJoined = on(
@@ -301,7 +352,7 @@ export function RoomProvider({
     );
 
     // ------------------------------------------------
-    // A user left the room.
+    // A user left the room
     // ------------------------------------------------
 
     const offLeft = on(
@@ -321,10 +372,7 @@ export function RoomProvider({
         }
 
         /*
-         * Find the participant BEFORE removing them.
-         *
-         * We need their anonymous name for the
-         * chat system message.
+         * Find the participant before removing them.
          */
         let leavingParticipant = null;
 
@@ -338,31 +386,24 @@ export function RoomProvider({
               );
 
             /*
-             * Remove immediately from the Online
+             * Remove immediately from the online
              * participant list.
              */
-            const updatedParticipants =
-              previousParticipants.filter(
-                (participant) =>
-                  participant.id !==
-                  leavingId
-              );
-
-            return updatedParticipants;
+            return previousParticipants.filter(
+              (participant) =>
+                participant.id !==
+                leavingId
+            );
           }
         );
 
         /*
          * React state updates are scheduled, so
          * leavingParticipant may not be available
-         * synchronously after setParticipants().
+         * synchronously.
          *
-         * Therefore, if the backend already sends
-         * message:new, that message is responsible
-         * for the chat update.
-         *
-         * We only create a fallback here when the
-         * participant information is available.
+         * If available, create a local fallback
+         * system message.
          */
         if (leavingParticipant) {
           const leavingName =
@@ -377,7 +418,7 @@ export function RoomProvider({
             (previousMessages) => {
               /*
                * Do not add a duplicate if the
-               * backend message has already arrived.
+               * backend message already arrived.
                */
               const alreadyExists =
                 previousMessages.some(
@@ -414,7 +455,7 @@ export function RoomProvider({
     );
 
     // ------------------------------------------------
-    // Room information updated.
+    // Room information updated
     // ------------------------------------------------
 
     const offRoomUpdate = on(
@@ -429,7 +470,7 @@ export function RoomProvider({
     );
 
     // ------------------------------------------------
-    // Successfully joined the room.
+    // Successfully joined the room
     // ------------------------------------------------
 
     const offRoster = on(
@@ -452,7 +493,7 @@ export function RoomProvider({
     );
 
     // ------------------------------------------------
-    // A single message was deleted.
+    // A single message was deleted
     // ------------------------------------------------
 
     const offDeleted = on(
@@ -473,7 +514,7 @@ export function RoomProvider({
     );
 
     // ------------------------------------------------
-    // Messages cleared.
+    // Messages cleared
     // ------------------------------------------------
 
     const offCleared = on(
@@ -484,29 +525,39 @@ export function RoomProvider({
     );
 
     // ------------------------------------------------
-    // Room expired / destroyed.
+    // Room expired / destroyed
     // ------------------------------------------------
 
     const offExpired = on(
       'room:expired',
       () => {
+        /*
+         * The room is gone.
+         *
+         * Completely clean the old socket and
+         * return to home.
+         */
         leaveRoomAndGoHome();
       }
     );
 
     // ------------------------------------------------
-    // Current user was removed by host.
+    // Current user was removed by host
     // ------------------------------------------------
 
     const offRemoved = on(
       'room:removed',
       () => {
+        /*
+         * Completely clean the old socket and
+         * return to home.
+         */
         leaveRoomAndGoHome();
       }
     );
 
     // ------------------------------------------------
-    // Cleanup
+    // Cleanup event listeners
     // ------------------------------------------------
 
     return () => {
@@ -636,25 +687,30 @@ export function RoomProvider({
 
   const handleLeaveRoom = useCallback(() => {
     /*
-     * This is an intentional leave.
-     *
-     * Do not change this to socket.disconnect()
-     * before emitting room:leave.
+     * Tell the backend this is an intentional leave.
      */
     emitLeaveRoom();
 
+    /*
+     * Immediately clean the client socket and
+     * navigate home.
+     */
     leaveRoomAndGoHome();
   }, [
     leaveRoomAndGoHome,
   ]);
 
   // --------------------------------------------------
-  // Room controls
+  // Lock room
   // --------------------------------------------------
 
   const handleLockRoom = useCallback(() => {
     emitLockRoom();
   }, []);
+
+  // --------------------------------------------------
+  // Unlock room
+  // --------------------------------------------------
 
   const handleUnlockRoom = useCallback(() => {
     emitUnlockRoom();
@@ -677,9 +733,12 @@ export function RoomProvider({
         );
 
         /*
-         * Do NOT navigate manually here.
+         * Do NOT manually navigate here.
          *
-         * The backend sends room:expired,
+         * The backend sends:
+         *
+         *   room:expired
+         *
          * which is handled by offExpired.
          */
       } catch (error) {
@@ -762,43 +821,73 @@ export function RoomProvider({
   // --------------------------------------------------
 
   const value = {
+    // ------------------------------------------------
     // Room identity
+    // ------------------------------------------------
+
     roomId,
     sessionId,
 
+    // ------------------------------------------------
     // Encryption
+    // ------------------------------------------------
+
     roomKey,
 
+    // ------------------------------------------------
     // Room state
+    // ------------------------------------------------
+
     room,
     participants,
     messages,
 
+    // ------------------------------------------------
     // Connection
+    // ------------------------------------------------
+
     typingUsers,
     connectionState,
     retryConnection,
 
+    // ------------------------------------------------
     // Replies
+    // ------------------------------------------------
+
     replyTo,
     setReplyTo,
 
+    // ------------------------------------------------
     // Messages
+    // ------------------------------------------------
+
     sendMessage,
     deleteMessage,
 
+    // ------------------------------------------------
     // Files
+    // ------------------------------------------------
+
     sendFile,
     uploadProgress,
 
+    // ------------------------------------------------
     // Typing
+    // ------------------------------------------------
+
     startTyping,
     stopTyping,
 
+    // ------------------------------------------------
     // Ownership
+    // ------------------------------------------------
+
     isOwner,
 
+    // ------------------------------------------------
     // Room controls
+    // ------------------------------------------------
+
     lockRoom:
       handleLockRoom,
 
@@ -826,11 +915,17 @@ export function RoomProvider({
     clearMessages:
       handleClearMessages,
 
+    // ------------------------------------------------
     // Leave
+    // ------------------------------------------------
+
     leaveRoom:
       handleLeaveRoom,
 
+    // ------------------------------------------------
     // Ready
+    // ------------------------------------------------
+
     ready: Boolean(roomKey),
   };
 
