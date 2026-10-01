@@ -48,50 +48,25 @@ export default function ChatRoomPage() {
   const navigate = useNavigate();
 
   // --------------------------------------------------
-  // Detect an actual browser reload
-  // --------------------------------------------------
-
-  const navigationEntry =
-    typeof window !== 'undefined'
-      ? performance.getEntriesByType('navigation')[0]
-      : null;
-
-  const isPageReload =
-    navigationEntry?.type === 'reload';
-
-  // --------------------------------------------------
   // Restore room session
   //
   // IMPORTANT:
   //
-  // We do NOT restore the saved session after a
-  // real browser reload.
+  // We do NOT use performance.getEntriesByType()
+  // here.
   //
-  // This means:
+  // That was causing normal SPA navigation from
+  // "Enter Room" to be detected as a browser reload
+  // and sending the user back to Home.
   //
-  // F5 / Refresh
-  //      ↓
-  // Home
+  // Priority:
   //
-  // But:
-  //
-  // iOS file viewer
-  //      ↓
-  // temporary socket disconnect
-  //      ↓
-  // return to GhostChat
-  //      ↓
-  // reconnect to same room
+  // 1. Router state from Create Room / Join Room
+  // 2. Existing sessionStorage session
   // --------------------------------------------------
 
   const [session] = useState(() => {
-    // Never restore the old room session after
-    // an actual browser reload.
-    if (isPageReload) {
-      return null;
-    }
-
-    // Normal navigation from Join Room / Create Room.
+    // Normal navigation from Create Room / Join Room.
     if (
       location.state?.password &&
       location.state?.sessionId
@@ -99,8 +74,8 @@ export default function ChatRoomPage() {
       return location.state;
     }
 
-    // Restore session when returning to the room
-    // without a full browser reload.
+    // Restore the room session when navigating back
+    // to the room without a new router state.
     try {
       const savedSession = sessionStorage.getItem(
         `ghostchat-session-${roomId}`
@@ -120,41 +95,13 @@ export default function ChatRoomPage() {
   });
 
   // --------------------------------------------------
-  // Handle browser reload
-  // --------------------------------------------------
-
-  useEffect(() => {
-    if (!isPageReload) {
-      return;
-    }
-
-    // Remove the old session so the room cannot
-    // automatically reopen after refresh.
-    sessionStorage.removeItem(
-      `ghostchat-session-${roomId}`
-    );
-
-    // Send the user back to Home.
-    navigate('/', {
-      replace: true,
-    });
-  }, [
-    isPageReload,
-    roomId,
-    navigate,
-  ]);
-
-  // --------------------------------------------------
-  // Save session for normal navigation
+  // Save session
   //
-  // Do NOT save it again during a browser reload.
+  // This allows the current room session to survive
+  // normal navigation/re-rendering.
   // --------------------------------------------------
 
   useEffect(() => {
-    if (isPageReload) {
-      return;
-    }
-
     if (
       location.state?.password &&
       location.state?.sessionId
@@ -165,7 +112,6 @@ export default function ChatRoomPage() {
       );
     }
   }, [
-    isPageReload,
     location.state,
     roomId,
   ]);
@@ -175,12 +121,6 @@ export default function ChatRoomPage() {
   // --------------------------------------------------
 
   useEffect(() => {
-    // The reload handler above is responsible for
-    // navigating Home during a real browser reload.
-    if (isPageReload) {
-      return;
-    }
-
     if (
       !session?.password ||
       !session?.sessionId
@@ -190,21 +130,10 @@ export default function ChatRoomPage() {
       });
     }
   }, [
-    isPageReload,
     session,
     roomId,
     navigate,
   ]);
-
-  // --------------------------------------------------
-  // During reload handling, render nothing.
-  // This prevents RoomProvider from being created
-  // with an invalid session for even one render.
-  // --------------------------------------------------
-
-  if (isPageReload) {
-    return null;
-  }
 
   // --------------------------------------------------
   // No valid session
