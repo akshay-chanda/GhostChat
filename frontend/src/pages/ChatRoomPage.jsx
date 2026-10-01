@@ -52,12 +52,12 @@ export default function ChatRoomPage() {
   //
   // IMPORTANT:
   //
-  // We do NOT use performance.getEntriesByType()
+  // Do NOT use performance.getEntriesByType()
   // here.
   //
-  // That was causing normal SPA navigation from
-  // "Enter Room" to be detected as a browser reload
-  // and sending the user back to Home.
+  // Normal SPA navigation from Enter Room to
+  // /room/:roomId must not be treated as a browser
+  // reload.
   //
   // Priority:
   //
@@ -66,7 +66,9 @@ export default function ChatRoomPage() {
   // --------------------------------------------------
 
   const [session] = useState(() => {
-    // Normal navigation from Create Room / Join Room.
+    /**
+     * Normal navigation from Create Room / Join Room.
+     */
     if (
       location.state?.password &&
       location.state?.sessionId
@@ -74,8 +76,9 @@ export default function ChatRoomPage() {
       return location.state;
     }
 
-    // Restore the room session when navigating back
-    // to the room without a new router state.
+    /**
+     * Restore existing session.
+     */
     try {
       const savedSession = sessionStorage.getItem(
         `ghostchat-session-${roomId}`
@@ -97,8 +100,8 @@ export default function ChatRoomPage() {
   // --------------------------------------------------
   // Save session
   //
-  // This allows the current room session to survive
-  // normal navigation/re-rendering.
+  // This allows the current session to remain available
+  // while the SPA is running.
   // --------------------------------------------------
 
   useEffect(() => {
@@ -152,12 +155,28 @@ export default function ChatRoomPage() {
       sessionId={session.sessionId}
       password={session.password}
       isOwner={Boolean(session.isOwner)}
+
+      /*
+       * IMPORTANT:
+       *
+       * This callback is used when RoomContext receives
+       * room:expired / room:removed.
+       *
+       * For host reload:
+       *   backend destroys room
+       *   -> room:expired
+       *   -> everyone comes back Home
+       *
+       * For explicit room destruction:
+       *   -> room:expired
+       *   -> everyone comes back Home
+       */
       onRoomClosed={() => {
         sessionStorage.removeItem(
           `ghostchat-session-${roomId}`
         );
 
-        navigate('/room-expired', {
+        navigate('/', {
           replace: true,
         });
       }}
@@ -238,9 +257,16 @@ function ChatRoomLayout({
   // --------------------------------------------------
 
   const clearSavedSession = useCallback(() => {
-    sessionStorage.removeItem(
-      `ghostchat-session-${roomId}`
-    );
+    try {
+      sessionStorage.removeItem(
+        `ghostchat-session-${roomId}`
+      );
+    } catch (error) {
+      console.warn(
+        'Failed to clear saved session:',
+        error
+      );
+    }
   }, [roomId]);
 
   // --------------------------------------------------
@@ -252,12 +278,26 @@ function ChatRoomLayout({
     setSettingsOpen(false);
     setParticipantsOpen(false);
 
+    /**
+     * Tell backend that this is an intentional leave.
+     *
+     * The backend will:
+     *
+     * HOST:
+     *   destroy the entire room
+     *
+     * PARTICIPANT:
+     *   remove only this participant
+     */
     if (typeof leaveRoom === 'function') {
       leaveRoom();
     }
 
     clearSavedSession();
 
+    /**
+     * Leave immediately from the current page.
+     */
     navigate('/', {
       replace: true,
     });
@@ -276,12 +316,25 @@ function ChatRoomLayout({
     setSettingsOpen(false);
     setParticipantsOpen(false);
 
+    /**
+     * The RoomContext sends room:destroy to the backend.
+     *
+     * Backend immediately:
+     *
+     * 1. destroys room
+     * 2. emits room:expired
+     * 3. disconnects all sockets
+     */
     if (typeof destroyRoom === 'function') {
       destroyRoom();
     }
 
     clearSavedSession();
 
+    /**
+     * The host does not need to wait for the socket event.
+     * Go Home immediately.
+     */
     navigate('/', {
       replace: true,
     });
@@ -293,6 +346,17 @@ function ChatRoomLayout({
 
   // --------------------------------------------------
   // Room expiration
+  //
+  // This is a REAL room expiration caused by the timer.
+  //
+  // This is different from:
+  //
+  //   host reload
+  //   host destroy
+  //   host leave
+  //
+  // Those room-close events are handled by
+  // onRoomClosed above and go directly to Home.
   // --------------------------------------------------
 
   const handleExpire = useCallback(() => {
@@ -314,6 +378,10 @@ function ChatRoomLayout({
     clearSavedSession,
     navigate,
   ]);
+
+  // --------------------------------------------------
+  // Room expiration timestamp
+  // --------------------------------------------------
 
   const validExpiresAt = room?.expiresAt
     ? new Date(room.expiresAt).getTime()

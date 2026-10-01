@@ -20,8 +20,8 @@ function emitError(socket, message) {
 /**
  * Mark every socket belonging to a room as already destroyed.
  *
- * This prevents duplicate cleanup when the owner explicitly
- * destroys the room and Socket.IO disconnects all other users.
+ * This prevents duplicate cleanup when the room has already
+ * been destroyed and Socket.IO disconnects the users.
  */
 function markRoomAsDestroyed(io, roomId) {
   for (const clientSocket of io.sockets.sockets.values()) {
@@ -34,11 +34,7 @@ function markRoomAsDestroyed(io, roomId) {
 /**
  * Find a socket by room ID and session ID
  */
-function findParticipantSocket(
-  io,
-  roomId,
-  sessionId
-) {
+function findParticipantSocket(io, roomId, sessionId) {
   return [...io.sockets.sockets.values()].find(
     (clientSocket) =>
       clientSocket.data.roomId === roomId &&
@@ -56,7 +52,9 @@ function registerRoomEvents(io, socket) {
   } = socket.data;
 
   /**
-   * Lock room
+   * ============================================================
+   * LOCK ROOM
+   * ============================================================
    */
   socket.on('room:lock', () => {
     try {
@@ -71,15 +69,14 @@ function registerRoomEvents(io, socket) {
         roomManager.getPublicRoomInfo(roomId)
       );
     } catch (error) {
-      emitError(
-        socket,
-        error.message
-      );
+      emitError(socket, error.message);
     }
   });
 
   /**
-   * Unlock room
+   * ============================================================
+   * UNLOCK ROOM
+   * ============================================================
    */
   socket.on('room:unlock', () => {
     try {
@@ -94,15 +91,14 @@ function registerRoomEvents(io, socket) {
         roomManager.getPublicRoomInfo(roomId)
       );
     } catch (error) {
-      emitError(
-        socket,
-        error.message
-      );
+      emitError(socket, error.message);
     }
   });
 
   /**
-   * Enable or disable new members
+   * ============================================================
+   * ACCEPTING NEW MEMBERS
+   * ============================================================
    */
   socket.on(
     'room:set-accepting-members',
@@ -119,16 +115,15 @@ function registerRoomEvents(io, socket) {
           roomManager.getPublicRoomInfo(roomId)
         );
       } catch (error) {
-        emitError(
-          socket,
-          error.message
-        );
+        emitError(socket, error.message);
       }
     }
   );
 
   /**
-   * Enable or disable file sharing
+   * ============================================================
+   * FILE SHARING
+   * ============================================================
    */
   socket.on(
     'room:set-file-sharing',
@@ -145,16 +140,15 @@ function registerRoomEvents(io, socket) {
           roomManager.getPublicRoomInfo(roomId)
         );
       } catch (error) {
-        emitError(
-          socket,
-          error.message
-        );
+        emitError(socket, error.message);
       }
     }
   );
 
   /**
-   * Change maximum participants
+   * ============================================================
+   * MAX PARTICIPANTS
+   * ============================================================
    */
   socket.on(
     'room:set-max-participants',
@@ -171,16 +165,15 @@ function registerRoomEvents(io, socket) {
           roomManager.getPublicRoomInfo(roomId)
         );
       } catch (error) {
-        emitError(
-          socket,
-          error.message
-        );
+        emitError(socket, error.message);
       }
     }
   );
 
   /**
-   * Extend room expiration
+   * ============================================================
+   * EXTEND ROOM EXPIRATION
+   * ============================================================
    */
   socket.on(
     'room:extend-expiration',
@@ -197,18 +190,17 @@ function registerRoomEvents(io, socket) {
           roomManager.getPublicRoomInfo(roomId)
         );
       } catch (error) {
-        emitError(
-          socket,
-          error.message
-        );
+        emitError(socket, error.message);
       }
     }
   );
 
   /**
-   * Remove a participant
+   * ============================================================
+   * REMOVE PARTICIPANT
    *
-   * This is an EXPLICIT owner action.
+   * Explicit owner action.
+   * ============================================================
    */
   socket.on(
     'room:remove-participant',
@@ -232,6 +224,10 @@ function registerRoomEvents(io, socket) {
           targetSessionId
         );
 
+        /**
+         * Tell everyone in the room that the participant
+         * was removed.
+         */
         io.to(roomId).emit(
           'room:user-left',
           {
@@ -239,6 +235,9 @@ function registerRoomEvents(io, socket) {
           }
         );
 
+        /**
+         * Add a system message.
+         */
         if (target) {
           const removedNotice =
             createSystemMessage(
@@ -256,6 +255,9 @@ function registerRoomEvents(io, socket) {
           );
         }
 
+        /**
+         * Disconnect the removed participant immediately.
+         */
         const targetSocket =
           findParticipantSocket(
             io,
@@ -264,45 +266,47 @@ function registerRoomEvents(io, socket) {
           );
 
         if (targetSocket) {
-          /*
-           * This is a real removal, not a temporary
-           * mobile/browser disconnect.
+          /**
+           * Prevent the normal disconnect handler from
+           * treating this as a normal participant leave.
            */
-          targetSocket.data.suppressLeaveEvent =
-            true;
+          targetSocket.data.suppressLeaveEvent = true;
+          targetSocket.data.intentionalLeave = true;
+          targetSocket.data.roomAlreadyDestroyed = false;
 
-          targetSocket.emit(
-            'room:removed'
-          );
+          targetSocket.emit('room:removed');
 
-          targetSocket.disconnect(
-            true
-          );
+          targetSocket.disconnect(true);
         }
       } catch (error) {
-        emitError(
-          socket,
-          error.message
-        );
+        emitError(socket, error.message);
       }
     }
   );
 
   /**
-   * Explicitly destroy room
+   * ============================================================
+   * DESTROY ROOM
    *
-   * IMPORTANT:
+   * Explicit owner action.
    *
-   * This destroys the entire room when the host
-   * explicitly clicks Destroy Room.
+   * Host clicks "Destroy Room":
+   *
+   * 1. Destroy room in backend
+   * 2. Mark all sockets
+   * 3. Tell everyone
+   * 4. Disconnect everyone immediately
+   *
+   * No delay.
+   * No grace period.
+   * ============================================================
    */
   socket.on(
     'room:destroy',
     (ack) => {
       try {
-        /*
-         * Only the room owner can destroy the
-         * entire room.
+        /**
+         * Only owner can destroy the room.
          */
         if (!socket.data.isOwner) {
           const message =
@@ -315,16 +319,12 @@ function registerRoomEvents(io, socket) {
             });
           }
 
-          emitError(
-            socket,
-            message
-          );
-
+          emitError(socket, message);
           return;
         }
 
-        /*
-         * Prevent duplicate destroy requests.
+        /**
+         * Prevent duplicate destruction.
          */
         if (socket.data.roomAlreadyDestroyed) {
           if (typeof ack === 'function') {
@@ -337,25 +337,30 @@ function registerRoomEvents(io, socket) {
           return;
         }
 
-        /*
-         * 1. Destroy the room in backend memory FIRST.
+        /**
+         * Prevent disconnecting logic from trying to
+         * perform normal leave cleanup.
+         */
+        socket.data.intentionalLeave = true;
+
+        /**
+         * 1. Destroy room in backend memory.
          */
         roomManager.destroyRoom(
           roomId,
           sessionId
         );
 
-        /*
-         * 2. Mark every socket in this room as
-         * already destroyed.
+        /**
+         * 2. Mark all room sockets as destroyed.
          */
         markRoomAsDestroyed(
           io,
           roomId
         );
 
-        /*
-         * 3. Confirm destruction to the host FIRST.
+        /**
+         * 3. Confirm to the host.
          */
         if (typeof ack === 'function') {
           ack({
@@ -363,31 +368,26 @@ function registerRoomEvents(io, socket) {
           });
         }
 
-        /*
-         * 4. Tell EVERYONE immediately that the room
-         * has permanently expired/destroyed.
+        /**
+         * 4. Tell everyone immediately.
          */
         io.to(roomId).emit(
           'room:expired'
         );
 
-        /*
-         * 5. Immediately disconnect everyone.
+        /**
+         * 5. Disconnect everyone immediately.
          *
-         * NO setTimeout.
-         * NO 500ms delay.
+         * There is intentionally NO setTimeout here.
          */
         try {
-          io.in(roomId).disconnectSockets(
-            true
-          );
+          io.in(roomId).disconnectSockets(true);
         } catch (disconnectError) {
           logger.warn(
             'Failed to disconnect destroyed room sockets',
             {
               roomId,
-              error:
-                disconnectError.message,
+              error: disconnectError.message,
             }
           );
         }
@@ -425,28 +425,31 @@ function registerRoomEvents(io, socket) {
   );
 
   /**
-   * Explicit leave room
+   * ============================================================
+   * LEAVE ROOM
    *
-   * This is used when the user actually clicks
-   * the Leave Room button.
+   * Explicit user action.
+   * ============================================================
    */
   socket.on(
     'room:leave',
     () => {
       try {
-        if (
-          socket.data.intentionalLeave
-        ) {
+        /**
+         * Prevent duplicate cleanup.
+         */
+        if (socket.data.intentionalLeave) {
           return;
         }
 
-        socket.data.intentionalLeave =
-          true;
+        socket.data.intentionalLeave = true;
 
-        /*
-         * Owner explicitly leaving:
+        /**
+         * ======================================================
+         * OWNER LEAVES
+         * ======================================================
          *
-         * Destroy the entire room.
+         * Owner leaving means the entire temporary room closes.
          */
         if (socket.data.isOwner) {
           roomManager.destroyRoom(
@@ -459,16 +462,27 @@ function registerRoomEvents(io, socket) {
             roomId
           );
 
+          /**
+           * Notify everyone immediately.
+           */
           io.to(roomId).emit(
             'room:expired'
           );
 
-          /*
-           * Immediately disconnect everyone.
+          /**
+           * Disconnect everyone immediately.
            */
-          io.in(roomId).disconnectSockets(
-            true
-          );
+          try {
+            io.in(roomId).disconnectSockets(true);
+          } catch (disconnectError) {
+            logger.warn(
+              'Failed to disconnect sockets after owner leave',
+              {
+                roomId,
+                error: disconnectError.message,
+              }
+            );
+          }
 
           logger.info(
             'Owner explicitly left - room destroyed',
@@ -481,14 +495,23 @@ function registerRoomEvents(io, socket) {
           return;
         }
 
-        /*
-         * Normal participant explicitly leaves.
+        /**
+         * ======================================================
+         * PARTICIPANT LEAVES
+         * ======================================================
+         */
+
+        /**
+         * Remove participant session immediately.
          */
         sessionManager.destroySession(
           roomId,
           sessionId
         );
 
+        /**
+         * Tell remaining participants.
+         */
         socket.to(roomId).emit(
           'room:user-left',
           {
@@ -496,6 +519,9 @@ function registerRoomEvents(io, socket) {
           }
         );
 
+        /**
+         * Add leave system message.
+         */
         const leavingName =
           socket.data.anonymousName;
 
@@ -537,78 +563,75 @@ function registerRoomEvents(io, socket) {
   );
 
   /**
-   * Handle socket disconnecting
+   * ============================================================
+   * SOCKET DISCONNECTING
    *
-   * IMPORTANT:
-   *
-   * A browser page reload causes the current Socket.IO
-   * connection to disconnect.
-   *
-   * Therefore:
+   * This is important for browser reloads.
    *
    * HOST:
-   *   Reload/disconnect -> destroy the entire room.
+   *   Reload/disconnect
+   *   -> destroy room
+   *   -> notify everyone
    *
    * PARTICIPANT:
-   *   Reload/disconnect -> remove only that participant.
+   *   Reload/disconnect
+   *   -> remove participant
+   *   -> notify remaining participants
    *
-   * Explicit room:leave and room:destroy are still
-   * handled separately above.
+   * There is NO grace period.
+   * ============================================================
    */
   socket.on(
     'disconnecting',
     () => {
       try {
-        /*
-         * Do not perform cleanup twice if the room
-         * has already been explicitly destroyed.
+        /**
+         * ------------------------------------------------------
+         * Already destroyed
+         * ------------------------------------------------------
          */
         if (socket.data.roomAlreadyDestroyed) {
           return;
         }
 
-        /*
-         * Do not perform cleanup twice if the user
-         * explicitly clicked Leave Room.
-         *
-         * The room:leave handler above has already
-         * performed the correct cleanup.
+        /**
+         * ------------------------------------------------------
+         * Explicit leave/destroy already handled
+         * ------------------------------------------------------
          */
         if (socket.data.intentionalLeave) {
           return;
         }
 
-        /*
-         * ==================================================
-         * HOST DISCONNECT / RELOAD
-         * ==================================================
+        /**
+         * ======================================================
+         * HOST RELOAD / DISCONNECT
+         * ======================================================
          */
         if (socket.data.isOwner) {
           try {
-            /*
-             * Destroy the room in backend memory.
+            /**
+             * Destroy room immediately.
              */
             roomManager.destroyRoom(
               roomId,
               sessionId
             );
 
-            /*
-             * Mark all sockets in the room so their
-             * disconnecting handlers do not try to
-             * destroy the room again.
+            /**
+             * Mark all sockets so their own disconnecting
+             * handlers do not perform duplicate cleanup.
              */
             markRoomAsDestroyed(
               io,
               roomId
             );
 
-            /*
-             * Tell EVERYONE immediately that the room
-             * is closed.
+            /**
+             * Notify every connected participant immediately.
              *
-             * RoomContext already handles room:expired
-             * and redirects to the home page.
+             * RoomContext should handle room:expired and
+             * navigate everyone to Home.
              */
             io.to(roomId).emit(
               'room:expired'
@@ -638,15 +661,14 @@ function registerRoomEvents(io, socket) {
           return;
         }
 
-        /*
-         * ==================================================
-         * PARTICIPANT DISCONNECT / RELOAD
-         * ==================================================
+        /**
+         * ======================================================
+         * PARTICIPANT RELOAD / DISCONNECT
+         * ======================================================
          */
 
-        /*
-         * Remove the participant's session from the
-         * backend immediately.
+        /**
+         * Remove participant immediately.
          */
         try {
           sessionManager.destroySession(
@@ -664,9 +686,8 @@ function registerRoomEvents(io, socket) {
           );
         }
 
-        /*
-         * Immediately tell the remaining participants
-         * that this participant has left.
+        /**
+         * Notify remaining participants immediately.
          */
         socket.to(roomId).emit(
           'room:user-left',
@@ -675,8 +696,8 @@ function registerRoomEvents(io, socket) {
           }
         );
 
-        /*
-         * Add a system message to the room.
+        /**
+         * Add system message.
          */
         const leavingName =
           socket.data.anonymousName;
