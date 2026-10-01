@@ -29,8 +29,19 @@ function scorePassword(pw) {
   return Math.min(score, 3);
 }
 
-const STRENGTH_LABEL = ['Too short', 'Weak', 'Medium', 'Strong'];
-const STRENGTH_COLOR = ['#EF4444', '#EF4444', '#F59E0B', '#22C55E'];
+const STRENGTH_LABEL = [
+  'Too short',
+  'Weak',
+  'Medium',
+  'Strong',
+];
+
+const STRENGTH_COLOR = [
+  '#EF4444',
+  '#EF4444',
+  '#F59E0B',
+  '#22C55E',
+];
 
 /**
  * CreateRoomForm
@@ -38,6 +49,16 @@ const STRENGTH_COLOR = ['#EF4444', '#EF4444', '#F59E0B', '#22C55E'];
  * Collects everything needed to spin up a room. Validation is
  * client-side for feedback only — the server re-validates and is
  * the source of truth for what's actually allowed.
+ *
+ * SECURITY:
+ * The backend returns:
+ * - sessionId      -> private authentication credential
+ * - sessionSecret  -> private authentication credential
+ * - participantId  -> public participant identity
+ *
+ * These values are passed through to the room-created page so the
+ * session can be persisted there. They must never be included in
+ * public room information or shared with other participants.
  */
 export default function CreateRoomForm() {
   const navigate = useNavigate();
@@ -51,7 +72,10 @@ export default function CreateRoomForm() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
-  const strength = useMemo(() => scorePassword(password), [password]);
+  const strength = useMemo(
+    () => scorePassword(password),
+    [password]
+  );
 
   const handleGeneratePassword = () => {
     setPassword(generateStrongPassword());
@@ -63,7 +87,9 @@ export default function CreateRoomForm() {
     setError(null);
 
     if (password.length < 8) {
-      setError('Password must be at least 8 characters.');
+      setError(
+        'Password must be at least 8 characters.'
+      );
       return;
     }
 
@@ -71,25 +97,37 @@ export default function CreateRoomForm() {
 
     try {
       const room = await createRoom({
-        roomName: roomName.trim() || undefined,
+        roomName:
+          roomName.trim() || undefined,
         password,
         duration,
         maxParticipants,
         allowFiles,
       });
 
-      // The API response never includes the password — the server
-      // doesn't echo it back. We already have it in this component's
-      // own state, so merge it in here rather than expecting the
-      // server to resend a secret it was just given.
+      /**
+       * The API response contains the owner's private
+       * authentication credentials.
+       *
+       * Do not log these values or put them into a URL.
+       *
+       * RoomCreatedPage will persist them in the private
+       * session storage entry for this room.
+       */
       navigate('/room-created', {
         state: {
           ...room,
           password,
+          sessionId: room.sessionId,
+          sessionSecret: room.sessionSecret,
+          participantId: room.participantId,
         },
       });
     } catch (err) {
-      setError(err?.message || 'Could not create the room. Try again.');
+      setError(
+        err?.message ||
+          'Could not create the room. Try again.'
+      );
     } finally {
       setSubmitting(false);
     }
@@ -121,14 +159,18 @@ export default function CreateRoomForm() {
             className="mb-1.5 block text-sm text-[#F8FAFC]"
           >
             Room name{' '}
-            <span className="text-[#94A3B8]">(optional)</span>
+            <span className="text-[#94A3B8]">
+              (optional)
+            </span>
           </label>
 
           <input
             id="roomName"
             type="text"
             value={roomName}
-            onChange={(e) => setRoomName(e.target.value)}
+            onChange={(e) =>
+              setRoomName(e.target.value)
+            }
             maxLength={40}
             placeholder="e.g. Design sync"
             autoComplete="off"
@@ -161,9 +203,15 @@ export default function CreateRoomForm() {
           <div className="relative min-w-0">
             <input
               id="roomPassword"
-              type={showPassword ? 'text' : 'password'}
+              type={
+                showPassword
+                  ? 'text'
+                  : 'password'
+              }
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) =>
+                setPassword(e.target.value)
+              }
               required
               minLength={8}
               placeholder="At least 8 characters"
@@ -188,7 +236,9 @@ export default function CreateRoomForm() {
             <div className="absolute inset-y-0 right-1 flex items-center gap-0.5">
               <button
                 type="button"
-                onClick={handleGeneratePassword}
+                onClick={
+                  handleGeneratePassword
+                }
                 title="Generate a strong password"
                 aria-label="Generate a strong password"
                 className="
@@ -211,9 +261,21 @@ export default function CreateRoomForm() {
 
               <button
                 type="button"
-                onClick={() => setShowPassword((v) => !v)}
-                title={showPassword ? 'Hide password' : 'Show password'}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                onClick={() =>
+                  setShowPassword(
+                    (v) => !v
+                  )
+                }
+                title={
+                  showPassword
+                    ? 'Hide password'
+                    : 'Show password'
+                }
+                aria-label={
+                  showPassword
+                    ? 'Hide password'
+                    : 'Show password'
+                }
                 className="
                   flex min-h-10 min-w-10 items-center justify-center
                   rounded-md
@@ -227,9 +289,15 @@ export default function CreateRoomForm() {
                 "
               >
                 {showPassword ? (
-                  <EyeOff className="h-4.5 w-4.5" aria-hidden="true" />
+                  <EyeOff
+                    className="h-4.5 w-4.5"
+                    aria-hidden="true"
+                  />
                 ) : (
-                  <Eye className="h-4.5 w-4.5" aria-hidden="true" />
+                  <Eye
+                    className="h-4.5 w-4.5"
+                    aria-hidden="true"
+                  />
                 )}
               </button>
             </div>
@@ -248,7 +316,9 @@ export default function CreateRoomForm() {
                     style={{
                       backgroundColor:
                         i < strength
-                          ? STRENGTH_COLOR[strength]
+                          ? STRENGTH_COLOR[
+                              strength
+                            ]
                           : 'rgba(255,255,255,0.08)',
                     }}
                   />
@@ -257,9 +327,18 @@ export default function CreateRoomForm() {
 
               <span
                 className="shrink-0 text-xs"
-                style={{ color: STRENGTH_COLOR[strength] }}
+                style={{
+                  color:
+                    STRENGTH_COLOR[
+                      strength
+                    ],
+                }}
               >
-                {STRENGTH_LABEL[strength]}
+                {
+                  STRENGTH_LABEL[
+                    strength
+                  ]
+                }
               </span>
             </div>
           )}
@@ -278,7 +357,11 @@ export default function CreateRoomForm() {
             <select
               id="duration"
               value={duration}
-              onChange={(e) => setDuration(Number(e.target.value))}
+              onChange={(e) =>
+                setDuration(
+                  Number(e.target.value)
+                )
+              }
               className="
                 min-h-11 w-full min-w-0 rounded-lg
                 border border-white/10
@@ -292,7 +375,10 @@ export default function CreateRoomForm() {
               "
             >
               {DURATIONS.map((d) => (
-                <option key={d.value} value={d.value}>
+                <option
+                  key={d.value}
+                  value={d.value}
+                >
                   {d.label}
                 </option>
               ))}
@@ -311,7 +397,9 @@ export default function CreateRoomForm() {
               id="maxParticipants"
               value={maxParticipants}
               onChange={(e) =>
-                setMaxParticipants(Number(e.target.value))
+                setMaxParticipants(
+                  Number(e.target.value)
+                )
               }
               className="
                 min-h-11 w-full min-w-0 rounded-lg
@@ -325,11 +413,16 @@ export default function CreateRoomForm() {
                 sm:text-sm
               "
             >
-              {PARTICIPANT_LIMITS.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
+              {PARTICIPANT_LIMITS.map(
+                (n) => (
+                  <option
+                    key={n}
+                    value={n}
+                  >
+                    {n}
+                  </option>
+                )
+              )}
             </select>
           </div>
         </div>
@@ -346,7 +439,11 @@ export default function CreateRoomForm() {
           <input
             type="checkbox"
             checked={allowFiles}
-            onChange={(e) => setAllowFiles(e.target.checked)}
+            onChange={(e) =>
+              setAllowFiles(
+                e.target.checked
+              )
+            }
             className="
               h-5 w-5 shrink-0
               rounded
@@ -359,7 +456,9 @@ export default function CreateRoomForm() {
             "
           />
 
-          <span>Allow file sharing</span>
+          <span>
+            Allow file sharing
+          </span>
         </label>
 
         {/* Error */}
@@ -399,7 +498,9 @@ export default function CreateRoomForm() {
             touch-manipulation
           "
         >
-          {submitting ? 'Creating room…' : 'Create secure room'}
+          {submitting
+            ? 'Creating room…'
+            : 'Create secure room'}
         </button>
       </div>
     </form>

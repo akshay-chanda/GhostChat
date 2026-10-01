@@ -1,15 +1,28 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  useNavigate,
+  useSearchParams,
+} from 'react-router-dom';
 import { joinRoom } from '../../services/roomService';
 
-export default function JoinRoomForm({ initialRoomId = '' }) {
+export default function JoinRoomForm({
+  initialRoomId = '',
+}) {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams] =
+    useSearchParams();
 
-  const [roomId, setRoomId] = useState(initialRoomId);
-  const [password, setPassword] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState(null);
+  const [roomId, setRoomId] =
+    useState(initialRoomId);
+
+  const [password, setPassword] =
+    useState('');
+
+  const [submitting, setSubmitting] =
+    useState(false);
+
+  const [error, setError] =
+    useState(null);
 
   /*
    * Automatically fill Room ID and Password
@@ -21,13 +34,24 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
    *
    * Example:
    * /join?room=ABC123&password=hello123
+   *
+   * IMPORTANT:
+   * The URL contains only the room ID and room password.
+   * It never contains sessionId or sessionSecret.
    */
   useEffect(() => {
-    const roomFromUrl = searchParams.get('room');
-    const passwordFromUrl = searchParams.get('password');
+    const roomFromUrl =
+      searchParams.get('room');
+
+    const passwordFromUrl =
+      searchParams.get('password');
 
     if (roomFromUrl) {
-      setRoomId(roomFromUrl.trim().toUpperCase());
+      setRoomId(
+        roomFromUrl
+          .trim()
+          .toUpperCase()
+      );
     }
 
     if (passwordFromUrl !== null) {
@@ -42,32 +66,70 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
     setSubmitting(true);
 
     try {
-      const normalizedRoomId = roomId.trim().toUpperCase();
+      const normalizedRoomId =
+        roomId
+          .trim()
+          .toUpperCase();
 
-      const session = await joinRoom({
-        roomId: normalizedRoomId,
-        password,
-      });
-
-      navigate(`/room/${session.roomId}`, {
-        state: {
+      const session =
+        await joinRoom({
+          roomId: normalizedRoomId,
           password,
-          sessionId: session.sessionId,
-          anonymousName: session.anonymousName,
-          isOwner: false,
-        },
-      });
+        });
+
+      /*
+       * The backend returns the joining participant's
+       * private authentication credentials:
+       *
+       *   sessionId
+       *   sessionSecret
+       *
+       * It also returns the public participantId.
+       *
+       * These are passed through router state to
+       * ChatRoomPage, which persists the session
+       * privately in sessionStorage.
+       */
+      navigate(
+        `/room/${session.roomId}`,
+        {
+          state: {
+            password,
+
+            // PRIVATE authentication credentials.
+            sessionId:
+              session.sessionId,
+
+            sessionSecret:
+              session.sessionSecret,
+
+            // PUBLIC participant identity.
+            participantId:
+              session.participantId,
+
+            anonymousName:
+              session.anonymousName,
+
+            isOwner: false,
+          },
+        }
+      );
     } catch (err) {
-      const status = err?.status;
+      const status =
+        err?.status;
 
       if (status === 429) {
         setError(
           'Too many attempts. Wait a moment before trying again.'
         );
       } else if (status === 409) {
-        setError('This room is full.');
+        setError(
+          'This room is full.'
+        );
       } else {
-        setError('Room ID or password is incorrect.');
+        setError(
+          'Room ID or password is incorrect.'
+        );
       }
     } finally {
       setSubmitting(false);
@@ -140,7 +202,9 @@ export default function JoinRoomForm({ initialRoomId = '' }) {
             type="text"
             value={roomId}
             onChange={(e) =>
-              setRoomId(e.target.value.toUpperCase())
+              setRoomId(
+                e.target.value.toUpperCase()
+              )
             }
             required
             autoComplete="off"

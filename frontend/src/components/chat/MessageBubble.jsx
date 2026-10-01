@@ -77,6 +77,7 @@ export default function MessageBubble({
   const {
     roomKey,
     sessionId,
+    sessionSecret,
   } = useRoom();
 
   const [copied, setCopied] = useState(false);
@@ -205,6 +206,7 @@ export default function MessageBubble({
       document.createElement('a');
 
     link.href = downloadObjectUrl;
+
     link.download =
       filename || 'download';
 
@@ -326,6 +328,18 @@ export default function MessageBubble({
           );
         }
 
+        if (!sessionId) {
+          throw new Error(
+            'Session ID is missing'
+          );
+        }
+
+        if (!sessionSecret) {
+          throw new Error(
+            'Session secret is missing'
+          );
+        }
+
         console.log(
           'Starting file download:',
           {
@@ -340,7 +354,11 @@ export default function MessageBubble({
             iv: fileIv,
             mimeType: fileMimeType,
             key: roomKey,
+
+            // Both private authentication
+            // credentials are required.
             sessionId,
+            sessionSecret,
           });
 
         if (

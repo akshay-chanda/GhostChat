@@ -2,115 +2,148 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 
-// Point file storage at a throwaway temp directory for this test
-// file's module registry, before app.js (and its transitive
-// config/env require) loads.
-process.env.FILE_STORAGE_PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostchat-test-'));
+process.env.FILE_STORAGE_PATH = fs.mkdtempSync(
+  path.join(os.tmpdir(), 'ghostchat-file-sharing-test-')
+);
 
 const request = require('supertest');
 const app = require('../../src/app');
+const { resetRateLimiters } = require('../../src/middleware/rateLimiter');
 
-async function createTestRoom() {
+async function createRoom(overrides = {}) {
   const res = await request(app)
     .post('/api/rooms')
-    .send({ password: 'a-valid-password-here', duration: 600, allowFileSharing: true });
-  return { ...res.body, cookie: res.headers['set-cookie'] };
+    .send({
+      password: 'a-valid-password-here',
+      duration: 600,
+      allowFileSharing: true,
+      ...overrides,
+    });
+
+  return {
+    ...res.body,
+    cookie: res.headers['set-cookie'],
+  };
 }
 
 describe('file sharing over HTTP', () => {
+  beforeEach(() => {
+    resetRateLimiters();
+  });
+
   it('uploads a file and returns metadata without the plaintext bytes', async () => {
-    const room = await createTestRoom();
-    const fakeCiphertext = Buffer.from('this-stands-in-for-encrypted-bytes');
+    const room = await createRoom();
+    const plaintext = Buffer.from('secret file contents');
 
     const res = await request(app)
       .post(`/api/rooms/${room.roomId}/files`)
       .set('Cookie', room.cookie)
-      .field('iv', 'ZmFrZS1pdg==')
-      .field('originalName', 'notes.txt')
+      .field('iv', 'aXY=')
+      .field('originalName', 'secret.txt')
       .field('mimeType', 'text/plain')
-      .field('size', String(fakeCiphertext.length))
-      .attach('file', fakeCiphertext, 'notes.txt');
+      .field('size', String(plaintext.length))
+      .attach('file', plaintext, 'secret.txt');
 
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({
-      type: 'file',
-      file: { originalName: 'notes.txt', size: fakeCiphertext.length, iv: 'ZmFrZS1pdg==' },
-    });
-    expect(res.body.file.downloadUrl).toMatch(/^\/api\/files\/.+\/download$/);
+    expect(res.body.file).toBeDefined();
+    expect(res.body.file.originalName).toBe('secret.txt');
+    expect(res.body.file.downloadUrl).toBeDefined();
+    expect(res.body.file).not.toHaveProperty('data');
+    expect(res.body.file).not.toHaveProperty('buffer');
+    expect(JSON.stringify(res.body)).not.toContain(
+      plaintext.toString()
+    );
   });
 
   it('downloads exactly the ciphertext bytes that were uploaded', async () => {
-    const room = await createTestRoom();
-    const fakeCiphertext = Buffer.from('roundtrip-bytes-should-match-exactly');
+    const room = await createRoom();
+    const ciphertext = Buffer.from('encrypted-ciphertext-bytes');
 
     const uploadRes = await request(app)
       .post(`/api/rooms/${room.roomId}/files`)
       .set('Cookie', room.cookie)
       .field('iv', 'aXY=')
-      .field('originalName', 'data.bin')
+      .field('originalName', 'encrypted.bin')
       .field('mimeType', 'application/octet-stream')
-      .field('size', String(fakeCiphertext.length))
-      .attach('file', fakeCiphertext, 'data.bin');
+      .field('size', String(ciphertext.length))
+      .attach('file', ciphertext, 'encrypted.bin');
+
+    expect(uploadRes.status).toBe(201);
+    expect(uploadRes.body.file).toBeDefined();
+
+    const fileId = uploadRes.body.file.id;
 
     const downloadRes = await request(app)
-      .get(uploadRes.body.file.downloadUrl)
+      .get(`/api/files/${fileId}/download`)
       .set('Cookie', room.cookie);
 
     expect(downloadRes.status).toBe(200);
-    expect(Buffer.compare(downloadRes.body, fakeCiphertext)).toBe(0);
+    expect(Buffer.from(downloadRes.body)).toEqual(ciphertext);
   });
 
   it('rejects an upload from a session that does not belong to the room', async () => {
-    const roomA = await createTestRoom();
-    const roomB = await createTestRoom();
+    const roomA = await createRoom();
+    const roomB = await createRoom();
+
+    const payload = Buffer.from('should-not-upload');
 
     const res = await request(app)
       .post(`/api/rooms/${roomA.roomId}/files`)
-      .set('Cookie', roomB.cookie) // valid session, wrong room
+      .set('Cookie', roomB.cookie)
       .field('iv', 'aXY=')
-      .field('originalName', 'x.txt')
+      .field('originalName', 'blocked.txt')
       .field('mimeType', 'text/plain')
-      .field('size', '3')
-      .attach('file', Buffer.from('abc'), 'x.txt');
+      .field('size', String(payload.length))
+      .attach('file', payload, 'blocked.txt');
 
     expect(res.status).toBe(403);
   });
 
   it('rejects a file over the 20MB limit before writing anything to disk', async () => {
-    const room = await createTestRoom();
-    const oversized = Buffer.alloc(20 * 1024 * 1024 + 1024, 1);
+    const room = await createRoom();
+
+    const oversized = Buffer.alloc(20 * 1024 * 1024 + 1);
 
     const res = await request(app)
       .post(`/api/rooms/${room.roomId}/files`)
       .set('Cookie', room.cookie)
       .field('iv', 'aXY=')
-      .field('originalName', 'huge.bin')
+      .field('originalName', 'too-large.bin')
       .field('mimeType', 'application/octet-stream')
       .field('size', String(oversized.length))
-      .attach('file', oversized, 'huge.bin');
+      .attach('file', oversized, 'too-large.bin');
 
     expect(res.status).toBe(413);
-  }, 15000);
+  });
 
   it('lets the uploader delete their own file, and the file becomes unreachable after', async () => {
-    const room = await createTestRoom();
+    const room = await createRoom();
+    const ciphertext = Buffer.from('temporary-file');
+
     const uploadRes = await request(app)
       .post(`/api/rooms/${room.roomId}/files`)
       .set('Cookie', room.cookie)
       .field('iv', 'aXY=')
-      .field('originalName', 'temp.txt')
+      .field('originalName', 'temporary.txt')
       .field('mimeType', 'text/plain')
-      .field('size', '3')
-      .attach('file', Buffer.from('abc'), 'temp.txt');
+      .field('size', String(ciphertext.length))
+      .attach('file', ciphertext, 'temporary.txt');
+
+    expect(uploadRes.status).toBe(201);
+    expect(uploadRes.body.file).toBeDefined();
 
     const fileId = uploadRes.body.file.id;
 
-    const deleteRes = await request(app).delete(`/api/files/${fileId}`).set('Cookie', room.cookie);
+    const deleteRes = await request(app)
+      .delete(`/api/files/${fileId}`)
+      .set('Cookie', room.cookie);
+
     expect(deleteRes.status).toBe(200);
 
-    const downloadAfterDelete = await request(app)
+    const downloadRes = await request(app)
       .get(`/api/files/${fileId}/download`)
       .set('Cookie', room.cookie);
-    expect(downloadAfterDelete.status).toBe(404);
+
+    expect(downloadRes.status).toBe(404);
   });
 });

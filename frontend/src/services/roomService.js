@@ -8,7 +8,13 @@ import { api } from './api';
  * this file is for request/response operations only.
  */
 
-export async function createRoom({ roomName, password, duration, maxParticipants, allowFiles }) {
+export async function createRoom({
+  roomName,
+  password,
+  duration,
+  maxParticipants,
+  allowFiles,
+}) {
   return api.post('/rooms', {
     roomName,
     password,
@@ -18,8 +24,14 @@ export async function createRoom({ roomName, password, duration, maxParticipants
   });
 }
 
-export async function joinRoom({ roomId, password }) {
-  return api.post('/rooms/join', { roomId, password });
+export async function joinRoom({
+  roomId,
+  password,
+}) {
+  return api.post('/rooms/join', {
+    roomId,
+    password,
+  });
 }
 
 export async function getRoomInfo(roomId) {

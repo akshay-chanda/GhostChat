@@ -2,47 +2,81 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 
-process.env.FILE_STORAGE_PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostchat-ratelimit-test-'));
+process.env.FILE_STORAGE_PATH = fs.mkdtempSync(
+  path.join(os.tmpdir(), 'ghostchat-ratelimit-test-')
+);
 
 const request = require('supertest');
 const app = require('../../src/app');
+const { resetRateLimiters } = require('../../src/middleware/rateLimiter');
 
 describe('rate limiting', () => {
+  afterEach(() => {
+    resetRateLimiters();
+  });
+
   it('room creation is limited per client', async () => {
     const attempts = await Promise.all(
       Array.from({ length: 8 }, () =>
-        request(app).post('/api/rooms').send({ password: 'a-valid-password-here', duration: 600 })
+        request(app)
+          .post('/api/rooms')
+          .send({
+            password: 'a-valid-password-here',
+            duration: 600,
+          })
       )
     );
+
     const limited = attempts.filter((r) => r.status === 429);
+
     expect(limited.length).toBeGreaterThan(0);
-    limited.forEach((res) => expect(res.body.code).toBe('tooManyRequests'));
+
+    limited.forEach((res) => {
+      expect(res.body.code).toBe('tooManyRequests');
+    });
   });
 
   it('join attempts are limited per client, independent of the room creation limiter', async () => {
     const createRes = await request(app)
       .post('/api/rooms')
-      .send({ password: 'a-valid-password-here', duration: 600 });
+      .send({
+        password: 'a-valid-password-here',
+        duration: 600,
+      });
+
     const { roomId } = createRes.body;
 
     const attempts = await Promise.all(
       Array.from({ length: 15 }, () =>
-        request(app).post('/api/rooms/join').send({ roomId, password: 'wrong-password-guess' })
+        request(app)
+          .post('/api/rooms/join')
+          .send({
+            roomId,
+            password: 'wrong-password-guess',
+          })
       )
     );
+
     expect(attempts.some((r) => r.status === 429)).toBe(true);
   });
 
   it('file uploads are limited per client', async () => {
     const createRes = await request(app)
       .post('/api/rooms')
-      .send({ password: 'a-valid-password-here', duration: 600, allowFileSharing: true });
+      .send({
+        password: 'a-valid-password-here',
+        duration: 600,
+        allowFileSharing: true,
+      });
+
     const { roomId } = createRes.body;
     const cookie = createRes.headers['set-cookie'];
 
     const attempts = [];
-    for (let i = 0; i < 7; i++) {
+
+    for (let i = 0; i < 7; i += 1) {
       const buffer = Buffer.from(`file-${i}`);
+
       // eslint-disable-next-line no-await-in-loop
       attempts.push(
         await request(app)
@@ -55,6 +89,7 @@ describe('rate limiting', () => {
           .attach('file', buffer, `f${i}.txt`)
       );
     }
+
     expect(attempts.some((r) => r.status === 429)).toBe(true);
   });
 
@@ -67,11 +102,19 @@ describe('rate limiting', () => {
       Array.from({ length: 15 }, (_, i) =>
         request(app)
           .post('/api/rooms/join')
-          .send({ roomId: i % 2 === 0 ? 'REAL0001' : 'FAKE0002', password: 'irrelevant' })
+          .send({
+            roomId: i % 2 === 0 ? 'REAL0001' : 'FAKE0002',
+            password: 'irrelevant',
+          })
       )
     );
-    const limitedBodies = attempts.filter((r) => r.status === 429).map((r) => JSON.stringify(r.body));
+
+    const limitedBodies = attempts
+      .filter((r) => r.status === 429)
+      .map((r) => JSON.stringify(r.body));
+
     const uniqueBodies = new Set(limitedBodies);
+
     expect(uniqueBodies.size).toBeLessThanOrEqual(1);
   });
 });

@@ -48,67 +48,62 @@ export default function ChatRoomPage() {
   const navigate = useNavigate();
 
   // --------------------------------------------------
-  // Detect an actual browser reload
-  // --------------------------------------------------
-
-  const navigationEntry =
-    typeof window !== 'undefined'
-      ? performance.getEntriesByType('navigation')[0]
-      : null;
-
-  const isPageReload =
-    navigationEntry?.type === 'reload';
-
-  // --------------------------------------------------
   // Restore room session
   //
-  // IMPORTANT:
+  // A valid room session requires:
   //
-  // We do NOT restore the saved session after a
-  // real browser reload.
+  //   password
+  //   sessionId
+  //   sessionSecret
   //
-  // This means:
+  // sessionId + sessionSecret are private credentials.
+  // participantId is the public participant identifier.
   //
-  // F5 / Refresh
-  //      ↓
-  // Home
-  //
-  // But:
-  //
-  // iOS file viewer
-  //      ↓
-  // temporary socket disconnect
-  //      ↓
-  // return to GhostChat
-  //      ↓
-  // reconnect to same room
+  // The session can now be restored after a normal
+  // browser reload using sessionStorage.
   // --------------------------------------------------
 
   const [session] = useState(() => {
-    // Never restore the old room session after
-    // an actual browser reload.
-    if (isPageReload) {
-      return null;
-    }
-
     // Normal navigation from Join Room / Create Room.
     if (
       location.state?.password &&
-      location.state?.sessionId
+      location.state?.sessionId &&
+      location.state?.sessionSecret
     ) {
       return location.state;
     }
 
-    // Restore session when returning to the room
-    // without a full browser reload.
+    // Restore the session after navigation or
+    // a normal browser reload.
     try {
       const savedSession = sessionStorage.getItem(
         `ghostchat-session-${roomId}`
       );
 
-      return savedSession
-        ? JSON.parse(savedSession)
-        : null;
+      if (!savedSession) {
+        return null;
+      }
+
+      const parsedSession =
+        JSON.parse(savedSession);
+
+      /*
+       * Do not restore an incomplete session.
+       *
+       * A valid session must contain:
+       *   password
+       *   sessionId
+       *   sessionSecret
+       */
+      if (
+        !parsedSession?.password ||
+        !parsedSession?.sessionId ||
+        !parsedSession?.sessionSecret
+      ) {
+        return null;
+      }
+
+      return parsedSession;
     } catch (error) {
       console.error(
         'Failed to restore session:',
@@ -120,44 +115,14 @@ export default function ChatRoomPage() {
   });
 
   // --------------------------------------------------
-  // Handle browser reload
+  // Save session for future navigation/reload
   // --------------------------------------------------
 
   useEffect(() => {
-    if (!isPageReload) {
-      return;
-    }
-
-    // Remove the old session so the room cannot
-    // automatically reopen after refresh.
-    sessionStorage.removeItem(
-      `ghostchat-session-${roomId}`
-    );
-
-    // Send the user back to Home.
-    navigate('/', {
-      replace: true,
-    });
-  }, [
-    isPageReload,
-    roomId,
-    navigate,
-  ]);
-
-  // --------------------------------------------------
-  // Save session for normal navigation
-  //
-  // Do NOT save it again during a browser reload.
-  // --------------------------------------------------
-
-  useEffect(() => {
-    if (isPageReload) {
-      return;
-    }
-
     if (
       location.state?.password &&
-      location.state?.sessionId
+      location.state?.sessionId &&
+      location.state?.sessionSecret
     ) {
       sessionStorage.setItem(
         `ghostchat-session-${roomId}`,
@@ -165,7 +130,6 @@ export default function ChatRoomPage() {
       );
     }
   }, [
-    isPageReload,
     location.state,
     roomId,
   ]);
@@ -175,36 +139,20 @@ export default function ChatRoomPage() {
   // --------------------------------------------------
 
   useEffect(() => {
-    // The reload handler above is responsible for
-    // navigating Home during a real browser reload.
-    if (isPageReload) {
-      return;
-    }
-
     if (
       !session?.password ||
-      !session?.sessionId
+      !session?.sessionId ||
+      !session?.sessionSecret
     ) {
       navigate(`/join/${roomId}`, {
         replace: true,
       });
     }
   }, [
-    isPageReload,
     session,
     roomId,
     navigate,
   ]);
-
-  // --------------------------------------------------
-  // During reload handling, render nothing.
-  // This prevents RoomProvider from being created
-  // with an invalid session for even one render.
-  // --------------------------------------------------
-
-  if (isPageReload) {
-    return null;
-  }
 
   // --------------------------------------------------
   // No valid session
@@ -212,7 +160,8 @@ export default function ChatRoomPage() {
 
   if (
     !session?.password ||
-    !session?.sessionId
+    !session?.sessionId ||
+    !session?.sessionSecret
   ) {
     return null;
   }
@@ -221,6 +170,8 @@ export default function ChatRoomPage() {
     <RoomProvider
       roomId={roomId}
       sessionId={session.sessionId}
+      sessionSecret={session.sessionSecret}
+      participantId={session.participantId}
       password={session.password}
       isOwner={Boolean(session.isOwner)}
       onRoomClosed={() => {
@@ -259,6 +210,8 @@ function ChatRoomLayout({
     messages,
     typingUsers,
     connectionState,
+
+    participantId,
 
     replyTo,
     setReplyTo,
@@ -340,22 +293,42 @@ function ChatRoomLayout({
 
   // --------------------------------------------------
   // Destroy room
+  //
+  // Host action:
+  //   1. Destroy the room on the backend.
+  //   2. Clear the host's saved session.
+  //   3. Redirect the host to the home page.
   // --------------------------------------------------
 
-  const handleDestroyRoom = useCallback(() => {
+  const handleDestroyRoom = useCallback(async () => {
     setConfirmAction(null);
     setSettingsOpen(false);
     setParticipantsOpen(false);
 
-    if (typeof destroyRoom === 'function') {
-      destroyRoom();
+    try {
+      if (typeof destroyRoom === 'function') {
+        await destroyRoom();
+      }
+
+      // The room has been destroyed by the host.
+      // Remove the local session so it cannot be
+      // restored if the browser is refreshed.
+      clearSavedSession();
+
+      // Host should return directly to the home page.
+      navigate('/', {
+        replace: true,
+      });
+    } catch (error) {
+      console.error(
+        'Failed to destroy room:',
+        error
+      );
+
+      // Keep the user inside the room if the
+      // destroy request failed.
+      setConfirmAction(null);
     }
-
-    clearSavedSession();
-
-    navigate('/', {
-      replace: true,
-    });
   }, [
     destroyRoom,
     clearSavedSession,
@@ -511,18 +484,10 @@ function ChatRoomLayout({
         bg-[#0B0F14]
       "
     >
-      {/* ------------------------------------------------
-          Watermark
-      ------------------------------------------------ */}
-
       <Watermark
         anonymousName={anonymousName}
         roomId={roomId}
       />
-
-      {/* ------------------------------------------------
-          Screenshot notification
-      ------------------------------------------------ */}
 
       {screenshotDetected && (
         <div
@@ -585,9 +550,7 @@ function ChatRoomLayout({
           md:px-6
         "
       >
-        {/* =================================================
-            TABLET / LAPTOP / DESKTOP HEADER
-        ================================================= */}
+        {/* Tablet / laptop / desktop header */}
 
         <div
           className="
@@ -601,8 +564,6 @@ function ChatRoomLayout({
             lg:gap-4
           "
         >
-          {/* GhostChat branding */}
-
           <div
             className="
               flex
@@ -637,8 +598,6 @@ function ChatRoomLayout({
             </span>
           </div>
 
-          {/* Secure room pill */}
-
           <div
             className="
               flex
@@ -670,8 +629,6 @@ function ChatRoomLayout({
             </span>
           </div>
 
-          {/* Room ID */}
-
           <span
             className="
               max-w-[120px]
@@ -689,9 +646,7 @@ function ChatRoomLayout({
           </span>
         </div>
 
-        {/* =================================================
-            MOBILE HEADER
-        ================================================= */}
+        {/* Mobile header */}
 
         <div
           className="
@@ -705,8 +660,6 @@ function ChatRoomLayout({
             md:hidden
           "
         >
-          {/* GhostChat branding */}
-
           <div
             className="
               flex
@@ -741,8 +694,6 @@ function ChatRoomLayout({
             </span>
           </div>
 
-          {/* Room ID */}
-
           <span
             className="
               min-w-0
@@ -762,9 +713,7 @@ function ChatRoomLayout({
           </span>
         </div>
 
-        {/* =================================================
-            HEADER CONTROLS
-        ================================================= */}
+        {/* Header controls */}
 
         <div
           className="
@@ -776,8 +725,6 @@ function ChatRoomLayout({
             sm:gap-2
           "
         >
-          {/* Room timer */}
-
           {room?.expiresAt && (
             <div
               className="
@@ -794,8 +741,6 @@ function ChatRoomLayout({
               />
             </div>
           )}
-
-          {/* Mobile participants button */}
 
           <button
             type="button"
@@ -861,8 +806,6 @@ function ChatRoomLayout({
             )}
           </button>
 
-          {/* Settings */}
-
           {isOwner && (
             <button
               type="button"
@@ -903,8 +846,6 @@ function ChatRoomLayout({
               />
             </button>
           )}
-
-          {/* Leave room */}
 
           <button
             type="button"
@@ -961,10 +902,6 @@ function ChatRoomLayout({
           overflow-hidden
         "
       >
-        {/* =================================================
-            CHAT AREA
-        ================================================= */}
-
         <div
           className="
             flex
@@ -983,21 +920,13 @@ function ChatRoomLayout({
           >
             <ChatWindow
               messages={messages}
-              currentSessionId={sessionId}
+              currentSessionId={participantId}
               typingUsers={typingUsers}
-              connectionState={
-                connectionState
-              }
-              onDeleteMessage={
-                deleteMessage
-              }
+              connectionState={connectionState}
+              onDeleteMessage={deleteMessage}
               onReplyTo={setReplyTo}
             />
           </div>
-
-          {/* ------------------------------------------------
-              Upload progress
-          ------------------------------------------------ */}
 
           {uploadProgress && (
             <div
@@ -1014,19 +943,11 @@ function ChatRoomLayout({
               "
             >
               <UploadProgress
-                fileName={
-                  uploadProgress.fileName
-                }
-                percent={
-                  uploadProgress.percent
-                }
+                fileName={uploadProgress.fileName}
+                percent={uploadProgress.percent}
               />
             </div>
           )}
-
-          {/* ------------------------------------------------
-              Upload error
-          ------------------------------------------------ */}
 
           {uploadError && (
             <div
@@ -1056,10 +977,6 @@ function ChatRoomLayout({
             </div>
           )}
 
-          {/* ------------------------------------------------
-              Message input
-          ------------------------------------------------ */}
-
           <div
             className="
               min-w-0
@@ -1071,24 +988,19 @@ function ChatRoomLayout({
               onSend={sendMessage}
               onTypingStart={startTyping}
               onTypingStop={stopTyping}
-              onAttachFile={
-                handleAttachFile
-              }
+              onAttachFile={handleAttachFile}
               replyTo={replyTo}
               onCancelReply={() =>
                 setReplyTo(null)
               }
               fileSharingEnabled={
-                room?.fileSharingEnabled ??
-                true
+                room?.fileSharingEnabled ?? true
               }
               disabled={
-                connectionState ===
-                'disconnected'
+                connectionState === 'disconnected'
               }
               disabledReason={
-                connectionState ===
-                'disconnected'
+                connectionState === 'disconnected'
                   ? 'Reconnecting…'
                   : undefined
               }
@@ -1096,9 +1008,7 @@ function ChatRoomLayout({
           </div>
         </div>
 
-        {/* =================================================
-            DESKTOP PARTICIPANT SIDEBAR
-        ================================================= */}
+        {/* Desktop participant sidebar */}
 
         <aside
           className="
@@ -1115,25 +1025,15 @@ function ChatRoomLayout({
         >
           <ParticipantList
             participants={participants}
-            currentSessionId={sessionId}
-            roomOwnerId={
-              isOwner
-                ? sessionId
-                : room?.ownerId
-            }
-            maxParticipants={
-              room?.maxParticipants
-            }
-            onRemoveParticipant={
-              removeParticipant
-            }
+            currentSessionId={participantId}
+            roomOwnerId={room?.ownerId}
+            maxParticipants={room?.maxParticipants}
+            onRemoveParticipant={removeParticipant}
           />
         </aside>
       </div>
 
-      {/* =================================================
-          MOBILE PARTICIPANT DRAWER
-      ================================================= */}
+      {/* Mobile participant drawer */}
 
       {participantsOpen && (
         <div
@@ -1144,8 +1044,6 @@ function ChatRoomLayout({
             md:hidden
           "
         >
-          {/* Backdrop */}
-
           <button
             type="button"
             aria-label="Close participants"
@@ -1162,8 +1060,6 @@ function ChatRoomLayout({
               backdrop-blur-[2px]
             "
           />
-
-          {/* Drawer */}
 
           <aside
             className="
@@ -1183,8 +1079,6 @@ function ChatRoomLayout({
               shadow-2xl
             "
           >
-            {/* Drawer header */}
-
             <div
               className="
                 flex
@@ -1274,8 +1168,6 @@ function ChatRoomLayout({
               </button>
             </div>
 
-            {/* Participant list */}
-
             <div
               className="
                 min-h-0
@@ -1286,27 +1178,17 @@ function ChatRoomLayout({
             >
               <ParticipantList
                 participants={participants}
-                currentSessionId={sessionId}
-                roomOwnerId={
-                  isOwner
-                    ? sessionId
-                    : room?.ownerId
-                }
-                maxParticipants={
-                  room?.maxParticipants
-                }
-                onRemoveParticipant={
-                  removeParticipant
-                }
+                currentSessionId={participantId}
+                roomOwnerId={room?.ownerId}
+                maxParticipants={room?.maxParticipants}
+                onRemoveParticipant={removeParticipant}
               />
             </div>
           </aside>
         </div>
       )}
 
-      {/* =================================================
-          SETTINGS MODAL
-      ================================================= */}
+      {/* Settings modal */}
 
       {isOwner && (
         <SettingsModal
@@ -1323,12 +1205,8 @@ function ChatRoomLayout({
               lockRoom();
             }
           }}
-          onToggleAcceptingNewMembers={(
-            enabled
-          ) => {
-            setAcceptingNewMembers(
-              enabled
-            );
+          onToggleAcceptingNewMembers={(enabled) => {
+            setAcceptingNewMembers(enabled);
           }}
           onToggleFileSharing={(enabled) => {
             setFileSharingEnabled(enabled);
@@ -1336,16 +1214,10 @@ function ChatRoomLayout({
           onChangeExpiration={(seconds) => {
             extendExpiration(seconds);
           }}
-          onChangeMaxParticipants={(
-            maxParticipants
-          ) => {
-            setMaxParticipants(
-              maxParticipants
-            );
+          onChangeMaxParticipants={(maxParticipants) => {
+            setMaxParticipants(maxParticipants);
           }}
-          onRemoveParticipant={
-            removeParticipant
-          }
+          onRemoveParticipant={removeParticipant}
           onClearMessages={clearMessages}
           onEndRoom={() => {
             setSettingsOpen(false);
@@ -1354,9 +1226,7 @@ function ChatRoomLayout({
         />
       )}
 
-      {/* =================================================
-          LEAVE CONFIRMATION
-      ================================================= */}
+      {/* Leave confirmation */}
 
       <ConfirmationModal
         open={confirmAction === 'leave'}
@@ -1369,16 +1239,13 @@ function ChatRoomLayout({
         }
       />
 
-      {/* =================================================
-          DESTROY CONFIRMATION
-      ================================================= */}
+      {/* Destroy confirmation */}
 
       <ConfirmationModal
         open={confirmAction === 'destroy'}
         title="Destroy this room?"
         description="All temporary room data and active sessions will be removed. This action cannot be undone."
         confirmLabel="Destroy room"
-        danger
         onConfirm={handleDestroyRoom}
         onCancel={() =>
           setConfirmAction(null)

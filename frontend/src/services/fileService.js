@@ -1,15 +1,27 @@
 import { API_BASE_URL } from '../utils/constants';
-import { encryptFile, decryptFile } from '../crypto/fileCrypto';
+import {
+  encryptFile,
+  decryptFile,
+} from '../crypto/fileCrypto';
 
 /**
  * Convert a backend download URL into an absolute URL.
  *
- * Examples:
- *   /api/rooms/ABC/files/123/download
- *      -> https://ghostchat-backend-redk.onrender.com/api/rooms/ABC/files/123/download
+ * Supports both:
  *
- *   https://ghostchat-backend-redk.onrender.com/api/...
- *      -> stays unchanged
+ * 1. Absolute API base:
+ *    https://ghostchat-backend-redk.onrender.com/api
+ *
+ * 2. Relative API base:
+ *    /api
+ *
+ * Examples:
+ *
+ *   /api/rooms/ABC/files/123/download
+ *   -> https://ghostchat-backend-redk.onrender.com/api/rooms/ABC/files/123/download
+ *
+ *   https://ghostchat-backend-redk.onrender.com/api/rooms/ABC/files/123/download
+ *   -> unchanged
  */
 function getAbsoluteDownloadUrl(downloadUrl) {
   if (!downloadUrl) {
@@ -18,7 +30,7 @@ function getAbsoluteDownloadUrl(downloadUrl) {
     );
   }
 
-  // Already an absolute URL
+  // Already an absolute URL.
   if (
     downloadUrl.startsWith('http://') ||
     downloadUrl.startsWith('https://')
@@ -26,32 +38,51 @@ function getAbsoluteDownloadUrl(downloadUrl) {
     return downloadUrl;
   }
 
-  const apiUrl = new URL(API_BASE_URL);
+  /*
+   * Resolve the configured API base safely.
+   *
+   * API_BASE_URL may be:
+   *
+   *   https://ghostchat-backend-redk.onrender.com/api
+   *
+   * or:
+   *
+   *   /api
+   *
+   * A relative API base must be resolved against the
+   * current frontend origin first.
+   */
+  const apiBaseUrl = new URL(
+    API_BASE_URL,
+    window.location.origin
+  );
 
   /*
-   * If the backend gives us:
+   * If the backend returns an absolute-path URL such as:
    *
-   * /api/rooms/...
+   * /api/rooms/ABC/files/123/download
    *
-   * use the backend origin + that complete path.
+   * preserve the complete path and use the backend origin.
    */
   if (downloadUrl.startsWith('/')) {
-    return `${apiUrl.origin}${downloadUrl}`;
+    return new URL(
+      downloadUrl,
+      apiBaseUrl.origin
+    ).toString();
   }
 
   /*
-   * If the backend gives us:
+   * If the backend returns a relative path such as:
    *
-   * rooms/...
+   * rooms/ABC/files/123/download
    *
-   * use the API base URL.
+   * resolve it against the configured API base.
    */
   return new URL(
     downloadUrl,
-    `${API_BASE_URL}/`
+    `${apiBaseUrl.toString().replace(/\/$/, '')}/`
   ).toString();
 }
-
 
 /**
  * Upload an encrypted file.
@@ -61,6 +92,7 @@ export function uploadFile({
   file,
   key,
   sessionId,
+  sessionSecret,
   onProgress,
 }) {
   return new Promise((resolve, reject) => {
@@ -139,6 +171,13 @@ export function uploadFile({
           );
         }
 
+        if (sessionSecret) {
+          xhr.setRequestHeader(
+            'X-Session-Secret',
+            sessionSecret
+          );
+        }
+
         xhr.upload.onprogress =
           (event) => {
             if (
@@ -211,7 +250,6 @@ export function uploadFile({
   });
 }
 
-
 /**
  * Download an encrypted file from the backend
  * and decrypt it using the room encryption key.
@@ -225,6 +263,7 @@ export async function downloadAndDecryptFile({
   mimeType,
   key,
   sessionId,
+  sessionSecret,
 }) {
   if (!downloadUrl) {
     throw new Error(
@@ -245,28 +284,15 @@ export async function downloadAndDecryptFile({
   }
 
   /*
-   * IMPORTANT:
-   *
    * The backend may return a relative URL.
    *
-   * Example:
-   * /api/rooms/ABC/files/123/download
-   *
-   * Because the frontend is hosted on Vercel,
-   * fetch(downloadUrl) would otherwise try to
-   * download the file from Vercel.
-   *
-   * We convert it to the Render backend URL.
+   * This helper handles both absolute and relative
+   * API_BASE_URL values.
    */
   const absoluteDownloadUrl =
     getAbsoluteDownloadUrl(
       downloadUrl
     );
-
-  console.log(
-    'Downloading encrypted file from:',
-    absoluteDownloadUrl
-  );
 
   const headers = {};
 
@@ -274,6 +300,12 @@ export async function downloadAndDecryptFile({
     headers[
       'X-Session-Id'
     ] = sessionId;
+  }
+
+  if (sessionSecret) {
+    headers[
+      'X-Session-Secret'
+    ] = sessionSecret;
   }
 
   const response =
@@ -312,8 +344,8 @@ export async function downloadAndDecryptFile({
   }
 
   /*
-   * The backend should return the
-   * encrypted ciphertext as raw binary.
+   * The backend returns encrypted
+   * ciphertext as raw binary.
    */
   const encryptedBlob =
     await response.blob();
@@ -335,7 +367,7 @@ export async function downloadAndDecryptFile({
   }
 
   /*
-   * Decrypt using the SAME:
+   * Decrypt using the same:
    *
    * - room key
    * - IV
@@ -366,27 +398,35 @@ export async function downloadAndDecryptFile({
     );
   }
 
-  /*
-   * Return the actual Blob.
-   *
-   * MessageBubble.jsx creates the temporary
-   * object URL and starts the browser download.
-   */
   return decryptedBlob;
 }
-
 
 /**
  * Delete a file from the backend.
  */
 export async function deleteFile(
   fileId,
-  sessionId
+  sessionId,
+  sessionSecret
 ) {
   if (!fileId) {
     throw new Error(
       'File ID is missing'
     );
+  }
+
+  const headers = {};
+
+  if (sessionId) {
+    headers[
+      'X-Session-Id'
+    ] = sessionId;
+  }
+
+  if (sessionSecret) {
+    headers[
+      'X-Session-Secret'
+    ] = sessionSecret;
   }
 
   const response =
@@ -395,12 +435,7 @@ export async function deleteFile(
       {
         method: 'DELETE',
         credentials: 'include',
-        headers: sessionId
-          ? {
-              'X-Session-Id':
-                sessionId,
-            }
-          : undefined,
+        headers,
       }
     );
 

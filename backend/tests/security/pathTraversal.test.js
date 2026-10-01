@@ -2,20 +2,36 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 
-const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostchat-traversal-test-'));
+const storageDir = fs.mkdtempSync(
+  path.join(os.tmpdir(), 'ghostchat-traversal-test-')
+);
+
 process.env.FILE_STORAGE_PATH = storageDir;
 
 const request = require('supertest');
 const app = require('../../src/app');
+const { resetRateLimiters } = require('../../src/middleware/rateLimiter');
 
 async function createRoomWithFiles() {
   const res = await request(app)
     .post('/api/rooms')
-    .send({ password: 'a-valid-password-here', duration: 600, allowFileSharing: true });
-  return { ...res.body, cookie: res.headers['set-cookie'] };
+    .send({
+      password: 'a-valid-password-here',
+      duration: 600,
+      allowFileSharing: true,
+    });
+
+  return {
+    ...res.body,
+    cookie: res.headers['set-cookie'],
+  };
 }
 
 describe('path traversal', () => {
+  beforeEach(() => {
+    resetRateLimiters();
+  });
+
   it('a traversal sequence in the original filename never escapes the storage directory', async () => {
     const room = await createRoomWithFiles();
     const payload = Buffer.from('should-stay-inside-storage-dir');
@@ -33,11 +49,14 @@ describe('path traversal', () => {
     expect(res.body.file.originalName).not.toContain('..');
     expect(res.body.file.originalName).not.toContain('/');
 
-    // The file this actually wrote must be inside storageDir, under
-    // a random server-generated name — never at the traversed path.
     const filesOnDisk = fs.readdirSync(storageDir);
+
     expect(filesOnDisk.length).toBeGreaterThan(0);
-    filesOnDisk.forEach((name) => expect(name).toMatch(/^f_[0-9a-f]{32}\.bin$/));
+
+    filesOnDisk.forEach((name) => {
+      expect(name).toMatch(/^f_[0-9a-f]{32}\.bin$/);
+    });
+
     expect(fs.existsSync('/etc/cron.d/evil.txt')).toBe(false);
   });
 
@@ -48,9 +67,6 @@ describe('path traversal', () => {
       .get('/api/files/..%2F..%2F..%2Fetc%2Fpasswd/download')
       .set('Cookie', room.cookie);
 
-    // fileId is used as a lookup key into an in-memory Map, never
-    // concatenated into a filesystem path — so a traversal-shaped id
-    // simply fails to match anything.
     expect(res.status).toBe(404);
   });
 
@@ -91,6 +107,7 @@ describe('path traversal', () => {
 
   it('storage filenames are unique random tokens, never derived from user input in any way', async () => {
     const room = await createRoomWithFiles();
+
     const sameNameUploads = await Promise.all(
       Array.from({ length: 3 }, () =>
         request(app)
@@ -104,7 +121,16 @@ describe('path traversal', () => {
       )
     );
 
-    const downloadUrls = sameNameUploads.map((r) => r.body.file.downloadUrl);
-    expect(new Set(downloadUrls).size).toBe(3); // three distinct files, no collision
+    sameNameUploads.forEach((res) => {
+      expect(res.status).toBe(201);
+      expect(res.body.file).toBeDefined();
+      expect(res.body.file.downloadUrl).toBeDefined();
+    });
+
+    const downloadUrls = sameNameUploads.map(
+      (res) => res.body.file.downloadUrl
+    );
+
+    expect(new Set(downloadUrls).size).toBe(3);
   });
 });

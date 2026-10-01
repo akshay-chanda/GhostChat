@@ -3,17 +3,34 @@ const crypto = require('crypto');
 /**
  * Three message shapes share one `type` discriminant so the client's
  * message list can render them polymorphically (see the frontend's
- * ChatWindow, which branches on msg.type). The server only ever
- * holds ciphertext for 'text' messages — it has no way to produce
- * message content itself, only metadata around it.
+ * ChatWindow, which branches on msg.type).
+ *
+ * SECURITY:
+ * For text and file messages, senderId is the PUBLIC participantId.
+ * The PRIVATE sessionId must never be passed into these message
+ * factories.
+ *
+ * The server only ever holds ciphertext for 'text' messages — it has
+ * no way to produce message content itself, only metadata around it.
  */
 
-function createTextMessage({ clientId, senderId, senderName, ciphertext, iv, replyToMessageId }) {
+function createTextMessage({
+  clientId,
+  senderId,
+  senderName,
+  ciphertext,
+  iv,
+  replyToMessageId,
+}) {
   return {
     id: crypto.randomUUID(),
     clientId,
     type: 'text',
+
+    // PUBLIC participant identifier.
+    // Never pass a private sessionId here.
     senderId,
+
     senderName,
     ciphertext,
     iv,
@@ -36,15 +53,27 @@ function createSystemMessage(content) {
   };
 }
 
-function createFileMessage({ senderId, senderName, file }) {
+function createFileMessage({
+  senderId,
+  senderName,
+  file,
+}) {
   return {
     id: file.id,
     type: 'file',
+
+    // PUBLIC participant identifier.
+    // Never pass a private sessionId here.
     senderId,
+
     senderName,
     file,
     timestamp: new Date().toISOString(),
   };
 }
 
-module.exports = { createTextMessage, createSystemMessage, createFileMessage };
+module.exports = {
+  createTextMessage,
+  createSystemMessage,
+  createFileMessage,
+};

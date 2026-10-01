@@ -2,27 +2,55 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 
-process.env.FILE_STORAGE_PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'ghostchat-authz-test-'));
+process.env.FILE_STORAGE_PATH = fs.mkdtempSync(
+  path.join(os.tmpdir(), 'ghostchat-authz-test-')
+);
 
 const request = require('supertest');
 const app = require('../../src/app');
+const { resetRateLimiters } = require('../../src/middleware/rateLimiter');
 
 async function createRoom(overrides = {}) {
   const res = await request(app)
     .post('/api/rooms')
-    .send({ password: 'a-valid-password-here', duration: 600, allowFileSharing: true, ...overrides });
-  return { ...res.body, cookie: res.headers['set-cookie'] };
+    .send({
+      password: 'a-valid-password-here',
+      duration: 600,
+      allowFileSharing: true,
+      ...overrides,
+    });
+
+  return {
+    ...res.body,
+    cookie: res.headers['set-cookie'],
+  };
 }
 
 async function joinRoom(roomId, password = 'a-valid-password-here') {
-  const res = await request(app).post('/api/rooms/join').send({ roomId, password });
-  return { ...res.body, cookie: res.headers['set-cookie'] };
+  const res = await request(app)
+    .post('/api/rooms/join')
+    .send({
+      roomId,
+      password,
+    });
+
+  return {
+    ...res.body,
+    cookie: res.headers['set-cookie'],
+  };
 }
 
 describe('unauthorized access', () => {
+  beforeEach(() => {
+    resetRateLimiters();
+  });
+
   it('rejects an owner-only action with no session at all', async () => {
     const room = await createRoom();
-    const res = await request(app).post(`/api/rooms/${room.roomId}/lock`);
+
+    const res = await request(app)
+      .post(`/api/rooms/${room.roomId}/lock`);
+
     expect(res.status).toBe(401);
   });
 
@@ -30,7 +58,10 @@ describe('unauthorized access', () => {
     const room = await createRoom();
     const member = await joinRoom(room.roomId);
 
-    const res = await request(app).post(`/api/rooms/${room.roomId}/lock`).set('Cookie', member.cookie);
+    const res = await request(app)
+      .post(`/api/rooms/${room.roomId}/lock`)
+      .set('Cookie', member.cookie);
+
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('unauthorized');
   });
@@ -39,8 +70,10 @@ describe('unauthorized access', () => {
     const roomA = await createRoom();
     const roomB = await createRoom();
 
-    // roomB's cookie is a fully valid session — just not for roomA.
-    const res = await request(app).post(`/api/rooms/${roomA.roomId}/lock`).set('Cookie', roomB.cookie);
+    const res = await request(app)
+      .post(`/api/rooms/${roomA.roomId}/lock`)
+      .set('Cookie', roomB.cookie);
+
     expect(res.status).toBe(403);
   });
 
@@ -48,12 +81,15 @@ describe('unauthorized access', () => {
     const room = await createRoom();
     const member = await joinRoom(room.roomId);
 
-    const res = await request(app).post(`/api/rooms/${room.roomId}/destroy`).set('Cookie', member.cookie);
+    const res = await request(app)
+      .post(`/api/rooms/${room.roomId}/destroy`)
+      .set('Cookie', member.cookie);
+
     expect(res.status).toBe(403);
 
-    // The room must genuinely still exist — this isn't just a
-    // rejected request, the room's state was never touched.
-    const infoRes = await request(app).get(`/api/rooms/${room.roomId}`);
+    const infoRes = await request(app)
+      .get(`/api/rooms/${room.roomId}`);
+
     expect(infoRes.status).toBe(200);
   });
 
@@ -70,11 +106,14 @@ describe('unauthorized access', () => {
       .field('size', '3')
       .attach('file', Buffer.from('abc'), 'secret.txt');
 
+    expect(uploadRes.status).toBe(201);
+    expect(uploadRes.body.file).toBeDefined();
+
     const fileId = uploadRes.body.file.id;
 
     const crossRoomDownload = await request(app)
       .get(`/api/files/${fileId}/download`)
-      .set('Cookie', roomB.cookie); // valid session, wrong room
+      .set('Cookie', roomB.cookie);
 
     expect(crossRoomDownload.status).toBe(403);
   });
@@ -93,23 +132,40 @@ describe('unauthorized access', () => {
       .field('size', '3')
       .attach('file', Buffer.from('abc'), 'shared.txt');
 
+    expect(uploadRes.status).toBe(201);
+    expect(uploadRes.body.file).toBeDefined();
+
     const fileId = uploadRes.body.file.id;
 
-    const deleteAttempt = await request(app).delete(`/api/files/${fileId}`).set('Cookie', otherMember.cookie);
+    const deleteAttempt = await request(app)
+      .delete(`/api/files/${fileId}`)
+      .set('Cookie', otherMember.cookie);
+
     expect(deleteAttempt.status).toBe(403);
 
-    // But the room owner CAN, even though they didn't upload it.
-    const ownerDelete = await request(app).delete(`/api/files/${fileId}`).set('Cookie', room.cookie);
+    const ownerDelete = await request(app)
+      .delete(`/api/files/${fileId}`)
+      .set('Cookie', room.cookie);
+
     expect(ownerDelete.status).toBe(200);
   });
 
   it('an expired/unknown session cookie is rejected rather than silently treated as anonymous', async () => {
     const room = await createRoom();
-    const forgedCookie = [`gc_session=${encodeURIComponent(JSON.stringify({ sessionId: 'nope', roomId: room.roomId }))}`];
 
-    const res = await request(app).post(`/api/rooms/${room.roomId}/lock`).set('Cookie', forgedCookie);
-    // Unsigned/forged cookie value — cookie-parser's signature check
-    // should reject it before it ever reaches sessionManager.
+    const forgedCookie = [
+      `gc_session=${encodeURIComponent(
+        JSON.stringify({
+          sessionId: 'nope',
+          roomId: room.roomId,
+        })
+      )}`,
+    ];
+
+    const res = await request(app)
+      .post(`/api/rooms/${room.roomId}/lock`)
+      .set('Cookie', forgedCookie);
+
     expect(res.status).toBe(401);
   });
 });

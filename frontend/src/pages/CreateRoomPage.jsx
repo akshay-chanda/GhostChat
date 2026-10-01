@@ -15,8 +15,16 @@ import QRModal from '../components/room/QRModal';
  * CreateRoomForm navigates here with the newly created
  * room details in router state after successful creation.
  *
- * The QR invitation is generated entirely on the
- * frontend using:
+ * PRIVATE SESSION DATA:
+ *   sessionId
+ *   sessionSecret
+ *
+ * These values are passed only to RoomCreatedCard so the owner
+ * can establish their authenticated room session.
+ *
+ * They are NEVER included in the QR invitation.
+ *
+ * The QR invitation is generated entirely on the frontend using:
  *
  *   window.location.origin
  *   roomId
@@ -87,37 +95,22 @@ export default function CreateRoomPage() {
       >
         {createdRoom ? (
           <>
-            {/* ------------------------------------------
-                Room Created Card
-            ------------------------------------------ */}
+            {/* Room Created Card */}
 
             <div className="w-full min-w-0">
               <RoomCreatedCard
                 roomId={createdRoom.roomId}
                 password={createdRoom.password}
                 sessionId={createdRoom.sessionId}
-                anonymousName={
-                  createdRoom.anonymousName
-                }
+                sessionSecret={createdRoom.sessionSecret}
+                participantId={createdRoom.participantId}
+                anonymousName={createdRoom.anonymousName}
                 isOwner={true}
                 onShowQr={handleShowQr}
               />
             </div>
 
-            {/* ------------------------------------------
-                QR Modal
-
-                IMPORTANT:
-                No shareLink is passed here.
-
-                QRModal creates the invitation URL from:
-                  - window.location.origin
-                  - roomId
-                  - password
-
-                Therefore the Render backend URL cannot
-                be used by the QR Copy Link button.
-            ------------------------------------------ */}
+            {/* QR Modal */}
 
             <QRModal
               open={qrOpen}
@@ -127,13 +120,13 @@ export default function CreateRoomPage() {
             />
           </>
         ) : (
-          /* --------------------------------------------
-             Create Room Form
-          -------------------------------------------- */
+          <>
+            {/* Create Room Form */}
 
-          <div className="w-full min-w-0">
-            <CreateRoomForm />
-          </div>
+            <div className="w-full min-w-0">
+              <CreateRoomForm />
+            </div>
+          </>
         )}
       </div>
     </main>

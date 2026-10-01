@@ -14,21 +14,24 @@ import { Copy, Check, QrCode } from 'lucide-react';
  * This allows the Join Room page to automatically
  * fill in the Room ID and Password.
  *
- * The same URL is used for:
+ * IMPORTANT:
+ * The private session credentials are NEVER included
+ * in the share URL or QR code.
  *
- *   - Share Link
- *   - Copy Link
- *   - QR Code
+ * Private:
+ *   sessionId
+ *   sessionSecret
  *
- * Example:
- *
- *   https://your-frontend.vercel.app/join?room=ABC123&password=secret
+ * Public:
+ *   participantId
  */
 export default function RoomCreatedCard({
   roomId,
   password,
   shareLink,
   sessionId,
+  sessionSecret,
+  participantId,
   anonymousName,
   isOwner,
   onShowQr,
@@ -47,14 +50,16 @@ export default function RoomCreatedCard({
    * IMPORTANT:
    * We do NOT use the backend shareLink when roomId exists.
    *
-   * The URL contains both:
+   * The URL contains:
    *
-   *   room    = Room ID
+   *   room     = Room ID
    *   password = Room password
    *
-   * Example:
+   * It MUST NOT contain:
    *
-   * /join?room=ABC123&password=myPassword
+   *   sessionId
+   *   sessionSecret
+   *   participantId
    */
   const frontendShareLink = useMemo(() => {
     if (
@@ -414,7 +419,14 @@ export default function RoomCreatedCard({
             navigate(`/room/${roomId}`, {
               state: {
                 password,
+
+                // PRIVATE authentication credentials.
                 sessionId,
+                sessionSecret,
+
+                // PUBLIC participant identity.
+                participantId,
+
                 anonymousName,
                 isOwner: Boolean(isOwner),
               },

@@ -1,45 +1,121 @@
 const express = require('express');
 const multer = require('multer');
 
-const fileController = require('../controllers/fileController');
-const { requireSession } = require('../middleware/auth');
-const { validateBody } = require('../middleware/validateRequest');
-const { filesPerWindowLimiter } = require('../middleware/rateLimiter');
-const { fileMetadataSchema } = require('../validators/fileSchemas');
-const env = require('../config/env');
+const fileController =
+  require('../controllers/fileController');
 
-const router = express.Router();
+const {
+  requireSession,
+} = require('../middleware/auth');
 
-// Memory storage, not disk — the file is ciphertext by the time it
-// gets here (encrypted client-side before upload), so buffering it
-// briefly in memory before fileStorageService writes it to disk
-// under a random name is fine even at the 20MB ceiling. multer's own
-// limit is set slightly above the app's stated max so our own
-// size check in fileStorageService is what actually reports the
-// friendly "too large" error, not a raw multer rejection.
+const {
+  validateBody,
+} = require('../middleware/validateRequest');
+
+const {
+  filesPerWindowLimiter,
+} = require('../middleware/rateLimiter');
+
+const {
+  fileMetadataSchema,
+} = require('../validators/fileSchemas');
+
+const env =
+  require('../config/env');
+
+const router =
+  express.Router();
+
+/*
+ * Keep uploaded ciphertext in memory temporarily.
+ *
+ * It is written to the temporary storage directory by
+ * fileStorageService using a server-generated random filename.
+ */
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: env.MAX_FILE_SIZE + 1024 },
+  storage:
+    multer.memoryStorage(),
+
+  limits: {
+    fileSize:
+      env.MAX_FILE_SIZE,
+  },
 });
 
+/**
+ * Convert Multer's raw size-limit error into the same
+ * 413 response used by fileStorageService.
+ */
+function uploadSingleFile(
+  req,
+  res,
+  next
+) {
+  upload.single('file')(
+    req,
+    res,
+    (error) => {
+      if (
+        error?.code ===
+        'LIMIT_FILE_SIZE'
+      ) {
+        return res.status(413).json({
+          code: 'generic',
+          message:
+            'File is larger than the 20MB limit.',
+        });
+      }
+
+      if (error) {
+        return next(error);
+      }
+
+      next();
+    }
+  );
+}
+
+/*
+ * Upload encrypted file.
+ */
 router.post(
   '/rooms/:roomId/files',
   requireSession,
   filesPerWindowLimiter,
-  upload.single('file'),
-  validateBody(fileMetadataSchema),
+  uploadSingleFile,
+  validateBody(
+    fileMetadataSchema
+  ),
   fileController.uploadFile
 );
 
-// IMPORTANT:
-// requireSession needs :roomId in order to validate the
-// X-Session-Id against the correct room.
+/*
+ * Primary download route.
+ *
+ * The room is resolved from the stored file metadata
+ * by requireSession.
+ */
+router.get(
+  '/files/:fileId/download',
+  requireSession,
+  fileController.downloadFile
+);
+
+/*
+ * Backwards-compatible room-scoped download route.
+ *
+ * Keeping this route is harmless and allows older frontend
+ * messages/URLs to continue working.
+ */
 router.get(
   '/rooms/:roomId/files/:fileId/download',
   requireSession,
   fileController.downloadFile
 );
 
+/*
+ * Delete a temporary file.
+ */
 router.delete(
   '/files/:fileId',
   requireSession,

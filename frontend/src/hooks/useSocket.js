@@ -16,6 +16,19 @@ import {
 /**
  * Manages the Socket.IO connection lifecycle for a room.
  *
+ * SECURITY:
+ *
+ * - sessionId is PRIVATE.
+ * - sessionSecret is PRIVATE.
+ * - participantId is PUBLIC and is handled by the backend.
+ *
+ * Socket.IO authentication requires BOTH:
+ *
+ *   sessionId
+ *   sessionSecret
+ *
+ * A sessionId by itself must never be enough to authenticate.
+ *
  * Mobile browsers can temporarily disconnect while:
  * - opening a file picker
  * - selecting a file
@@ -28,6 +41,7 @@ import {
 export function useSocket({
   roomId,
   sessionId,
+  sessionSecret,
   roomKey,
 }) {
   const navigate = useNavigate();
@@ -62,9 +76,14 @@ export function useSocket({
     }, [navigate]);
 
   useEffect(() => {
+    /*
+     * All required private credentials must exist
+     * before attempting a socket connection.
+     */
     if (
       !roomId ||
       !sessionId ||
+      !sessionSecret ||
       !roomKey
     ) {
       return undefined;
@@ -73,10 +92,22 @@ export function useSocket({
     redirectingRef.current =
       false;
 
+    /*
+     * IMPORTANT:
+     *
+     * Pass BOTH private authentication credentials.
+     *
+     * The backend socketAuth middleware now requires:
+     *
+     *   roomId
+     *   sessionId
+     *   sessionSecret
+     */
     const socket =
       connectSocket({
         roomId,
         sessionId,
+        sessionSecret,
         key: roomKey,
       });
 
@@ -375,6 +406,7 @@ export function useSocket({
   }, [
     roomId,
     sessionId,
+    sessionSecret,
     roomKey,
     redirectToHome,
   ]);

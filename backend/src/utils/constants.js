@@ -13,7 +13,7 @@ const DEFAULT_MAX_PARTICIPANTS = 20;
 const HARD_MAX_PARTICIPANTS = 50;
 
 const BLOCKED_FILE_EXTENSIONS = ['.exe', '.bat', '.cmd', '.ps1', '.scr', '.js', '.vbs', '.msi', '.jar'];
-const ALLOWED_FILE_EXTENSIONS = ['.pdf', '.txt', '.docx', '.png', '.jpg', '.jpeg', '.webp', '.zip'];
+const ALLOWED_FILE_EXTENSIONS = ['.pdf', '.txt', '.docx', '.png', '.jpg', '.jpeg', '.webp', '.zip', '.bin'];
 
 const ROOM_ID_LENGTH = 8;
 const SESSION_ID_BYTES = 24;
