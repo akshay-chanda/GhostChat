@@ -702,17 +702,76 @@ export function extendExpiration(
 
 /**
  * Destroy the room.
+ *
+ * IMPORTANT:
+ * The backend must acknowledge the request
+ * with:
+ *
+ * {
+ *   ok: true
+ * }
+ *
+ * The promise resolves only after the backend
+ * confirms that the room was destroyed.
  */
 export function destroyRoom() {
-  if (
-    !socket ||
-    !socket.connected
-  ) {
-    return;
-  }
+  return new Promise(
+    (resolve, reject) => {
+      if (
+        !socket ||
+        !socket.connected
+      ) {
+        reject(
+          new Error(
+            'Socket is not connected'
+          )
+        );
 
-  socket.emit(
-    'room:destroy'
+        return;
+      }
+
+      let finished = false;
+
+      const timeout =
+        setTimeout(() => {
+          if (finished) {
+            return;
+          }
+
+          finished = true;
+
+          reject(
+            new Error(
+              'Room destruction request timed out'
+            )
+          );
+        }, 10000);
+
+      socket.emit(
+        'room:destroy',
+        (response) => {
+          if (finished) {
+            return;
+          }
+
+          finished = true;
+
+          clearTimeout(timeout);
+
+          if (response?.ok) {
+            resolve(response);
+            return;
+          }
+
+          reject(
+            new Error(
+              response?.message ||
+                'Failed to destroy room'
+            )
+          );
+        }
+      );
+    }
   );
 }
 

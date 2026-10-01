@@ -1,73 +1,30 @@
 import { API_BASE_URL } from '../utils/constants';
 
 /**
- * Thin fetch wrapper for the GhostChat API.
- *
- * - Sends credentials so the signed session cookie is included.
- * - Parses JSON responses when available.
- * - Throws an Error containing status/code/message for non-2xx responses.
- * - Converts network/CORS failures into a clearer error.
- *
- * Never logs request or response bodies because they may contain
- * room passwords or other sensitive information.
+ * Thin fetch wrapper. Throws an Error with a `.status` property on
+ * any non-2xx response so callers (see JoinRoomForm's err.status
+ * checks) can branch on status codes without re-parsing the response
+ * themselves. Never logs request/response bodies — they may contain
+ * room passwords.
  */
-async function request(
-  path,
-  {
-    method = 'GET',
-    body,
-    headers = {},
-  } = {}
-) {
-  let response;
+async function request(path, { method = 'GET', body, headers = {} } = {}) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...headers,
+    },
+    credentials: 'include',
+    body: body ? JSON.stringify(body) : undefined,
+  });
 
-  try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
-      method,
-
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-
-      credentials: 'include',
-
-      body:
-        body !== undefined
-          ? JSON.stringify(body)
-          : undefined,
-    });
-  } catch (networkError) {
-    const error = new Error(
-      'Unable to connect to the GhostChat server. Please check your internet connection and try again.'
-    );
-
-    error.code = 'networkError';
-    error.status = 0;
-    error.cause = networkError;
-
-    throw error;
-  }
-
-  const contentType =
-    response.headers.get('content-type') || '';
-
-  const isJson =
-    contentType.includes('application/json');
-
-  const data = isJson
-    ? await response.json().catch(() => null)
-    : null;
+  const isJson = response.headers.get('content-type')?.includes('application/json');
+  const data = isJson ? await response.json().catch(() => null) : null;
 
   if (!response.ok) {
-    const error = new Error(
-      data?.message ||
-        `Request failed with status ${response.status}.`
-    );
-
+    const error = new Error(data?.message || 'Request failed');
     error.status = response.status;
     error.code = data?.code;
-
     throw error;
   }
 
@@ -75,20 +32,7 @@ async function request(
 }
 
 export const api = {
-  get: (path) => {
-    return request(path);
-  },
-
-  post: (path, body) => {
-    return request(path, {
-      method: 'POST',
-      body,
-    });
-  },
-
-  delete: (path) => {
-    return request(path, {
-      method: 'DELETE',
-    });
-  },
+  get: (path) => request(path),
+  post: (path, body) => request(path, { method: 'POST', body }),
+  delete: (path) => request(path, { method: 'DELETE' }),
 };
