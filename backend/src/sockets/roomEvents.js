@@ -47,22 +47,25 @@ function findParticipantSocket(
 }
 
 /**
- * Send participant-left event and system message.
+ * Emit only a participant-left roster update.
  *
  * IMPORTANT:
  *
- * We do NOT destroy the session here.
+ * This function does NOT create a chat system message.
  *
- * A participant may be:
- * - reloading the browser
- * - opening a file viewer
- * - switching applications
- * - temporarily losing network connectivity
+ * A socket disconnect can happen because of:
  *
- * The session must therefore remain available for
- * the participant to reconnect.
+ * - browser reload
+ * - file viewer
+ * - app switching
+ * - temporary network loss
+ * - browser lifecycle
+ *
+ * Therefore a normal disconnect must not create:
+ *
+ * "X left the room."
  */
-function notifyParticipantLeft(
+function notifyParticipantDisconnected(
   socket,
   io,
   roomId,
@@ -74,35 +77,14 @@ function notifyParticipantLeft(
       id: sessionId,
     }
   );
-
-  const leavingName =
-    socket.data.anonymousName;
-
-  if (leavingName) {
-    const leaveNotice =
-      createSystemMessage(
-        `${leavingName} left the room.`
-      );
-
-    store.addMessage(
-      roomId,
-      leaveNotice
-    );
-
-    socket.to(roomId).emit(
-      'message:new',
-      leaveNotice
-    );
-  }
 }
 
 /**
- * Send participant-joined event and system message.
+ * Emit a participant joined event AND a system message.
  *
- * This is used when:
- * - a participant joins
- * - a participant successfully resumes after reload
- * - a participant reconnects after a temporary disconnect
+ * This is ONLY for a genuine new participant join.
+ *
+ * It must NOT be used by room:resume.
  */
 function notifyParticipantJoined(
   socket,
@@ -128,9 +110,11 @@ function notifyParticipantJoined(
   const participantData = {
     id: sessionId,
     sessionId,
+
     anonymousName:
       participant.anonymousName ??
       socket.data.anonymousName,
+
     isOwner:
       Boolean(
         participant.isOwner ??
@@ -139,8 +123,8 @@ function notifyParticipantJoined(
   };
 
   /*
-   * Make sure the new socket has the latest
-   * participant information.
+   * Store the latest participant information
+   * on this socket.
    */
   socket.data.anonymousName =
     participantData.anonymousName;
@@ -149,21 +133,20 @@ function notifyParticipantJoined(
     participantData.isOwner;
 
   /*
-   * Tell everyone else that this participant
-   * is active again.
+   * Update the participant roster.
    */
   socket.to(roomId).emit(
     'room:user-joined',
     participantData
   );
 
-  const joiningName =
-    participantData.anonymousName;
-
-  if (joiningName) {
+  /*
+   * ONLY genuine joins create a visible system message.
+   */
+  if (participantData.anonymousName) {
     const joinNotice =
       createSystemMessage(
-        `${joiningName} joined the room.`
+        `${participantData.anonymousName} joined the room.`
       );
 
     store.addMessage(
@@ -181,6 +164,80 @@ function notifyParticipantJoined(
 }
 
 /**
+ * Emit only a participant resume/reconnect event.
+ *
+ * IMPORTANT:
+ *
+ * No system chat message is created here.
+ *
+ * This is what prevents:
+ *
+ * "Falcon left the room."
+ * "Falcon joined the room."
+ *
+ * when Falcon simply reloads or reconnects.
+ */
+function notifyParticipantResumed(
+  socket,
+  io,
+  roomId,
+  sessionId
+) {
+  const participant =
+    sessionManager.validateSession(
+      roomId,
+      sessionId
+    );
+
+  if (!participant) {
+    emitError(
+      socket,
+      'Invalid or expired session.'
+    );
+
+    return false;
+  }
+
+  const participantData = {
+    id: sessionId,
+    sessionId,
+
+    anonymousName:
+      participant.anonymousName ??
+      socket.data.anonymousName,
+
+    isOwner:
+      Boolean(
+        participant.isOwner ??
+        socket.data.isOwner
+      ),
+  };
+
+  /*
+   * Update this socket with the current
+   * participant information.
+   */
+  socket.data.anonymousName =
+    participantData.anonymousName;
+
+  socket.data.isOwner =
+    participantData.isOwner;
+
+  /*
+   * Only update the roster.
+   *
+   * NO message:new.
+   * NO "joined the room" system message.
+   */
+  socket.to(roomId).emit(
+    'room:user-joined',
+    participantData
+  );
+
+  return true;
+}
+
+/**
  * Register room-related socket events.
  */
 function registerRoomEvents(
@@ -191,6 +248,46 @@ function registerRoomEvents(
     roomId,
     sessionId,
   } = socket.data;
+
+  // --------------------------------------------------
+  // IMPORTANT: INITIAL JOIN
+  // --------------------------------------------------
+
+  /*
+   * sockets/index.js already:
+   *
+   * 1. authenticated this socket
+   * 2. joined the Socket.IO room
+   * 3. sent room:joined to this socket
+   *
+   * Therefore this is the single place where the
+   * initial participant presence announcement happens.
+   *
+   * Do this asynchronously after the event handlers
+   * have been registered.
+   */
+  if (!socket.data.isOwner) {
+    /*
+     * The participant was already created by:
+     *
+     * POST /api/rooms/join
+     *
+     * Therefore this is a genuine initial join.
+     */
+    notifyParticipantJoined(
+      socket,
+      io,
+      roomId,
+      sessionId
+    );
+  } else {
+    /*
+     * The room owner was created when the room was
+     * created. Do not announce the owner as a new
+     * participant every time their socket connects.
+     */
+    socket.data.initialPresenceAnnounced = true;
+  }
 
   // --------------------------------------------------
   // Lock room
@@ -381,8 +478,8 @@ function registerRoomEvents(
         }
 
         /*
-         * Get the participant before destroying
-         * their session so we can display their name.
+         * Get participant information before
+         * destroying the session.
          */
         const target =
           sessionManager.validateSession(
@@ -391,8 +488,8 @@ function registerRoomEvents(
           );
 
         /*
-         * roomManager performs the owner/permission
-         * validation.
+         * Owner permission is checked inside
+         * roomManager.
          */
         roomManager.removeParticipant(
           roomId,
@@ -402,7 +499,7 @@ function registerRoomEvents(
 
         /*
          * Permanently invalidate the removed
-         * participant's session.
+         * participant session.
          */
         sessionManager.destroySession(
           roomId,
@@ -410,8 +507,7 @@ function registerRoomEvents(
         );
 
         /*
-         * Tell everyone in the room that this
-         * participant is no longer active.
+         * Update everyone else's roster.
          */
         io.to(roomId).emit(
           'room:user-left',
@@ -420,6 +516,9 @@ function registerRoomEvents(
           }
         );
 
+        /*
+         * Explicit removal gets a visible system message.
+         */
         if (target) {
           const removedNotice =
             createSystemMessage(
@@ -438,8 +537,7 @@ function registerRoomEvents(
         }
 
         /*
-         * If the participant currently has a socket,
-         * remove it immediately.
+         * Disconnect the removed participant.
          */
         const targetSocket =
           findParticipantSocket(
@@ -499,10 +597,6 @@ function registerRoomEvents(
           return;
         }
 
-        /*
-         * Prevent disconnecting cleanup from running
-         * a second room-destruction operation.
-         */
         socket.data.intentionalLeave =
           true;
 
@@ -517,17 +611,12 @@ function registerRoomEvents(
         );
 
         /*
-         * Everyone currently inside the room gets
-         * the room-closed event immediately.
+         * Close the room immediately.
          */
         io.to(roomId).emit(
           'room:expired'
         );
 
-        /*
-         * Tell the frontend the server successfully
-         * destroyed the room.
-         */
         if (typeof ack === 'function') {
           ack({
             ok: true,
@@ -535,7 +624,7 @@ function registerRoomEvents(
         }
 
         /*
-         * Immediately disconnect everybody.
+         * No delay.
          */
         io.in(roomId).disconnectSockets(
           true
@@ -574,7 +663,7 @@ function registerRoomEvents(
   );
 
   // --------------------------------------------------
-  // Explicit participant/owner leave
+  // Explicit participant / owner leave
   // --------------------------------------------------
 
   socket.on(
@@ -629,10 +718,8 @@ function registerRoomEvents(
         // --------------------------------------------
 
         /*
-         * Explicit leave is different from a reload.
-         *
-         * Here the participant really wants to leave,
-         * so their session is permanently destroyed.
+         * Explicit leave permanently destroys the
+         * participant session.
          */
         sessionManager.destroySession(
           roomId,
@@ -695,19 +782,14 @@ function registerRoomEvents(
     () => {
       try {
         /*
-         * The owner does not resume.
+         * Owner does not resume.
          *
-         * If the owner reloads, the room is intentionally
-         * destroyed by the disconnecting handler below.
+         * Owner reload/disconnect closes the room.
          */
         if (socket.data.isOwner) {
           return;
         }
 
-        /*
-         * Check that the participant's session still
-         * exists.
-         */
         const participant =
           sessionManager.validateSession(
             roomId,
@@ -723,10 +805,6 @@ function registerRoomEvents(
           return;
         }
 
-        /*
-         * Make sure this socket has the participant's
-         * latest information.
-         */
         socket.data.anonymousName =
           participant.anonymousName ??
           socket.data.anonymousName;
@@ -737,10 +815,15 @@ function registerRoomEvents(
           );
 
         /*
-         * Tell the other users that this participant
-         * is active again.
+         * IMPORTANT:
+         *
+         * Resume only updates presence.
+         *
+         * It does NOT create:
+         *
+         * "X joined the room."
          */
-        notifyParticipantJoined(
+        notifyParticipantResumed(
           socket,
           io,
           roomId,
@@ -771,9 +854,7 @@ function registerRoomEvents(
     'disconnecting',
     () => {
       /*
-       * Room was already destroyed.
-       *
-       * Do not send another leave event.
+       * Room already destroyed.
        */
       if (
         socket.data.roomAlreadyDestroyed
@@ -782,8 +863,7 @@ function registerRoomEvents(
       }
 
       /*
-       * Explicit Leave Room or explicit removal
-       * already handled everything.
+       * Explicit leave/removal already handled it.
        */
       if (
         socket.data.intentionalLeave ||
@@ -801,8 +881,8 @@ function registerRoomEvents(
       ) {
         try {
           /*
-           * Host closing/reloading the browser means
-           * the entire room must close immediately.
+           * Host reload/close means the room closes
+           * immediately.
            */
           roomManager.destroyRoom(
             roomId,
@@ -814,10 +894,6 @@ function registerRoomEvents(
             roomId
           );
 
-          /*
-           * Tell all remaining participants that
-           * the room has closed.
-           */
           io.to(roomId).emit(
             'room:expired'
           );
@@ -848,24 +924,19 @@ function registerRoomEvents(
       // --------------------------------------------
 
       /*
+       * Do NOT destroy the participant session.
+       *
+       * Only remove the participant from the ACTIVE
+       * roster.
+       *
        * IMPORTANT:
        *
-       * DO NOT destroy the participant session.
+       * No "left the room" chat message is generated.
        *
-       * The participant may simply be:
-       *
-       * - reloading
-       * - opening a file
-       * - returning from a file viewer
-       * - switching applications
-       * - temporarily losing connection
-       *
-       * The session remains valid.
-       *
-       * Only the active socket is removed from the
-       * participant list.
+       * This prevents reload/file-viewer/app-switch
+       * from generating fake chat messages.
        */
-      notifyParticipantLeft(
+      notifyParticipantDisconnected(
         socket,
         io,
         roomId,
