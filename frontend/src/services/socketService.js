@@ -10,29 +10,14 @@ let roomKey = null;
 let currentParams = null;
 
 /**
- * ============================================================
- * CONNECT SOCKET
- * ============================================================
+ * Connect to a room
  */
-export function connectSocket({
-  roomId,
-  sessionId,
-  key,
-}) {
-  if (!roomId || !sessionId) {
-    console.error(
-      '[socketService] Missing roomId or sessionId'
-    );
-
-    return null;
-  }
-
+export function connectSocket({ roomId, sessionId, key }) {
   /*
-   * If this is already the exact same room/session,
-   * reuse the existing socket.
+   * Reuse the existing socket when this is the same room/session.
    *
-   * This is important for mobile browsers when the user
-   * temporarily leaves the browser to open a file viewer.
+   * This is important when the mobile browser comes back from
+   * a file picker, file viewer, or another application.
    */
   if (
     socket &&
@@ -49,23 +34,11 @@ export function connectSocket({
   }
 
   /*
-   * If a socket belongs to another room/session,
-   * completely close it before creating a new one.
+   * Close any previous socket.
    */
   if (socket) {
-    try {
-      socket.removeAllListeners();
-      socket.disconnect();
-    } catch (error) {
-      console.warn(
-        '[socketService] Previous socket cleanup failed:',
-        error
-      );
-    }
-
-    socket = null;
-    roomKey = null;
-    currentParams = null;
+    socket.removeAllListeners();
+    socket.disconnect();
   }
 
   roomKey = key;
@@ -75,109 +48,119 @@ export function connectSocket({
     sessionId,
   };
 
-  /*
-   * Create a completely new Socket.IO connection.
-   */
   socket = io(SOCKET_URL, {
     auth: {
       roomId,
       sessionId,
     },
 
+    /*
+     * WebSocket only, matching the backend configuration.
+     */
     transports: ['websocket'],
 
+    /*
+     * IMPORTANT:
+     * Enable Socket.IO automatic reconnection.
+     *
+     * Mobile browsers can temporarily disconnect when:
+     * - opening the Android file picker
+     * - opening an iOS file viewer
+     * - switching applications
+     * - temporarily losing network connectivity
+     */
     reconnection: true,
 
+    /*
+     * Keep trying because the browser may remain in the
+     * background for an unpredictable amount of time.
+     */
     reconnectionAttempts: Infinity,
 
+    /*
+     * Retry after 1 second initially.
+     */
     reconnectionDelay: 1000,
 
+    /*
+     * Never wait more than 5 seconds between attempts.
+     */
     reconnectionDelayMax: 5000,
 
+    /*
+     * Add a little randomization to retry timing.
+     */
     randomizationFactor: 0.5,
 
     autoConnect: true,
 
     /*
-     * Allows temporary browser/app switching on mobile
-     * without Socket.IO intentionally closing the socket.
+     * Do not force the socket closed because of browser
+     * page lifecycle behavior.
      */
     closeOnBeforeunload: false,
   });
 
-  /*
-   * CONNECT
-   */
   socket.on('connect', () => {
     console.log(
-      '[socketService] Socket connected:',
-      socket?.id
+      'Socket connected:',
+      socket.id
     );
 
     console.log(
-      '[socketService] Room ID:',
+      'Room ID:',
       roomId
     );
 
     console.log(
-      '[socketService] Session ID:',
+      'Session ID:',
       sessionId
     );
   });
 
-  /*
-   * CONNECTION ERROR
-   */
-  socket.on(
-    'connect_error',
-    (error) => {
-      console.error(
-        '[socketService] Socket connection error:',
-        error?.message || error
-      );
-    }
-  );
+  socket.on('connect_error', (error) => {
+    console.error(
+      'Socket connection error:',
+      error?.message || error
+    );
 
-  /*
-   * DISCONNECT
-   */
-  socket.on(
-    'disconnect',
-    (reason) => {
-      console.log(
-        '[socketService] Socket disconnected:',
-        reason
-      );
-    }
-  );
+    /*
+     * IMPORTANT:
+     *
+     * Do NOT redirect the user here.
+     *
+     * A connect_error can be temporary on mobile.
+     * Socket.IO will automatically retry.
+     *
+     * If the server rejects the session permanently,
+     * useSocket.js handles the explicit server error.
+     */
+  });
 
-  /*
-   * SERVER CONNECTION ERROR
-   */
-  socket.on(
-    'connection:error',
-    (payload) => {
-      console.error(
-        '[socketService] Server socket error:',
-        payload
-      );
-    }
-  );
+  socket.on('disconnect', (reason) => {
+    console.log(
+      'Socket disconnected:',
+      reason
+    );
+  });
+
+  socket.on('connection:error', (payload) => {
+    console.error(
+      'Server socket error:',
+      payload
+    );
+  });
 
   return socket;
 }
 
 /**
- * ============================================================
- * RECONNECT SOCKET
- * ============================================================
+ * Explicitly reconnect the existing socket.
+ *
+ * Used when a mobile browser becomes active again.
  */
 export function reconnectSocket() {
   if (!socket) {
-    console.warn(
-      '[socketService] No socket available to reconnect'
-    );
-
     return;
   }
 
@@ -193,215 +176,151 @@ export function reconnectSocket() {
 }
 
 /**
- * ============================================================
- * DISCONNECT SOCKET
- * ============================================================
- *
- * Completely removes the current socket.
- *
- * IMPORTANT:
- * This should only be called when the application is
- * intentionally leaving the current room.
+ * Disconnect socket and clear session data.
  */
 export function disconnectSocket() {
-  const oldSocket = socket;
+  if (socket) {
+    socket.removeAllListeners();
 
-  /*
-   * Clear the singleton state FIRST.
-   *
-   * This prevents a late socket event from accidentally
-   * being treated as the active socket.
-   */
+    if (
+      socket.connected ||
+      socket.active
+    ) {
+      socket.disconnect();
+    }
+  }
+
   socket = null;
   roomKey = null;
   currentParams = null;
-
-  if (!oldSocket) {
-    return;
-  }
-
-  try {
-    oldSocket.removeAllListeners();
-
-    if (
-      oldSocket.connected ||
-      oldSocket.active
-    ) {
-      oldSocket.disconnect();
-    }
-  } catch (error) {
-    console.warn(
-      '[socketService] Socket disconnect failed:',
-      error
-    );
-  }
 }
 
 /**
- * ============================================================
- * LEAVE ROOM
- * ============================================================
- *
- * Explicit participant/owner leave.
- *
- * The backend receives room:leave first.
- * Then the local socket is immediately destroyed.
+ * Leave the current room.
  */
 export function leaveRoom() {
-  const activeSocket = socket;
-
-  if (
-    activeSocket &&
-    activeSocket.connected
-  ) {
-    try {
-      activeSocket.emit(
-        'room:leave'
-      );
-    } catch (error) {
-      console.error(
-        '[socketService] Failed to emit room:leave:',
-        error
-      );
-    }
+  if (socket?.connected) {
+    socket.emit('room:leave');
   }
 
   disconnectSocket();
 }
 
 /**
- * ============================================================
- * GET SOCKET
- * ============================================================
+ * Get active socket.
  */
 export function getSocket() {
   return socket;
 }
 
 /**
- * ============================================================
- * WAIT FOR SOCKET CONNECTION
- * ============================================================
+ * Wait until socket is connected.
  */
-function waitForConnection(
-  timeout = 15000
-) {
-  return new Promise(
-    (resolve, reject) => {
-      if (!socket) {
-        reject(
-          new Error(
-            'Socket is not initialized'
-          )
-        );
+function waitForConnection(timeout = 15000) {
+  return new Promise((resolve, reject) => {
+    if (!socket) {
+      reject(
+        new Error(
+          'Socket is not initialized'
+        )
+      );
 
-        return;
-      }
+      return;
+    }
 
-      if (socket.connected) {
-        resolve();
-        return;
-      }
+    if (socket.connected) {
+      resolve();
+      return;
+    }
 
-      let finished = false;
-      let timer = null;
+    let finished = false;
+    let timer;
 
-      const cleanup = () => {
-        socket?.off(
-          'connect',
-          handleConnect
-        );
-
-        socket?.off(
-          'connect_error',
-          handleError
-        );
-
-        if (timer) {
-          clearTimeout(timer);
-        }
-      };
-
-      const finishResolve = () => {
-        if (finished) {
-          return;
-        }
-
-        finished = true;
-
-        cleanup();
-
-        resolve();
-      };
-
-      const finishReject = (
-        error
-      ) => {
-        if (finished) {
-          return;
-        }
-
-        finished = true;
-
-        cleanup();
-
-        reject(error);
-      };
-
-      const handleConnect = () => {
-        console.log(
-          '[socketService] Socket connected while waiting'
-        );
-
-        finishResolve();
-      };
-
-      const handleError = (
-        error
-      ) => {
-        /*
-         * Do not reject immediately.
-         *
-         * Socket.IO may automatically reconnect.
-         */
-        console.error(
-          '[socketService] Connection attempt failed:',
-          error?.message || error
-        );
-      };
-
-      timer = setTimeout(() => {
-        finishReject(
-          new Error(
-            'Socket connection timed out'
-          )
-        );
-      }, timeout);
-
-      socket.once(
+    const cleanup = () => {
+      socket?.off(
         'connect',
         handleConnect
       );
 
-      socket.on(
+      socket?.off(
         'connect_error',
         handleError
       );
 
-      if (
-        !socket.connected &&
-        !socket.active
-      ) {
-        socket.connect();
+      clearTimeout(timer);
+    };
+
+    const finishResolve = () => {
+      if (finished) {
+        return;
       }
+
+      finished = true;
+
+      cleanup();
+      resolve();
+    };
+
+    const finishReject = (error) => {
+      if (finished) {
+        return;
+      }
+
+      finished = true;
+
+      cleanup();
+      reject(error);
+    };
+
+    const handleConnect = () => {
+      console.log(
+        'Socket connected while waiting'
+      );
+
+      finishResolve();
+    };
+
+    /*
+     * Do NOT reject immediately on connect_error.
+     *
+     * Socket.IO may still be reconnecting.
+     */
+    const handleError = (error) => {
+      console.error(
+        'Connection attempt failed:',
+        error?.message || error
+      );
+    };
+
+    timer = setTimeout(() => {
+      finishReject(
+        new Error(
+          'Socket connection timed out'
+        )
+      );
+    }, timeout);
+
+    socket.once(
+      'connect',
+      handleConnect
+    );
+
+    socket.on(
+      'connect_error',
+      handleError
+    );
+
+    if (
+      !socket.connected &&
+      !socket.active
+    ) {
+      socket.connect();
     }
-  );
+  });
 }
 
 /**
- * ============================================================
- * SEND MESSAGE
- * ============================================================
+ * Send an encrypted message.
  */
 export async function sendMessage(
   plaintext,
@@ -470,7 +389,7 @@ export async function sendMessage(
     return clientId;
   } catch (error) {
     console.error(
-      '[socketService] SEND MESSAGE ERROR:',
+      'SEND MESSAGE ERROR:',
       error
     );
 
@@ -479,32 +398,24 @@ export async function sendMessage(
 }
 
 /**
- * ============================================================
- * RECEIVE MESSAGES
- * ============================================================
+ * Listen for new messages.
  */
-export function onMessage(
-  callback
-) {
+export function onMessage(callback) {
   if (!socket) {
     console.warn(
-      '[socketService] Cannot listen for messages: socket is missing'
+      'Cannot listen for messages: socket is missing'
     );
 
     return () => {};
   }
 
-  const activeSocket = socket;
-
-  const handler = async (
-    payload
-  ) => {
+  const handler = async (payload) => {
     if (
       !payload ||
       typeof payload !== 'object'
     ) {
       console.warn(
-        '[socketService] Invalid message payload:',
+        'Invalid message payload:',
         payload
       );
 
@@ -512,21 +423,17 @@ export function onMessage(
     }
 
     /*
-     * System messages are not encrypted.
+     * System messages do not require decryption.
      */
-    if (
-      payload.type === 'system'
-    ) {
+    if (payload.type === 'system') {
       callback(payload);
       return;
     }
 
     /*
-     * File messages are handled separately.
+     * File messages do not require text decryption.
      */
-    if (
-      payload.type === 'file'
-    ) {
+    if (payload.type === 'file') {
       callback({
         ...payload,
         content:
@@ -572,7 +479,7 @@ export function onMessage(
       });
     } catch (error) {
       console.error(
-        '[socketService] Message decryption failed:',
+        'Message decryption failed:',
         error
       );
 
@@ -584,13 +491,13 @@ export function onMessage(
     }
   };
 
-  activeSocket.on(
+  socket.on(
     'message:new',
     handler
   );
 
   return () => {
-    activeSocket.off(
+    socket?.off(
       'message:new',
       handler
     );
@@ -598,9 +505,7 @@ export function onMessage(
 }
 
 /**
- * ============================================================
- * DELETE MESSAGE
- * ============================================================
+ * Delete a message.
  */
 export function deleteMessage(
   messageId
@@ -611,7 +516,7 @@ export function deleteMessage(
     !messageId
   ) {
     console.warn(
-      '[socketService] Cannot delete message: socket unavailable'
+      'Cannot delete message: socket is unavailable'
     );
 
     return;
@@ -626,9 +531,7 @@ export function deleteMessage(
 }
 
 /**
- * ============================================================
- * TYPING
- * ============================================================
+ * Typing events.
  */
 export function emitTypingStart() {
   if (
@@ -657,9 +560,7 @@ export function emitTypingStop() {
 }
 
 /**
- * ============================================================
- * ROOM LOCK
- * ============================================================
+ * Room lock controls.
  */
 export function lockRoom() {
   if (
@@ -688,9 +589,7 @@ export function unlockRoom() {
 }
 
 /**
- * ============================================================
- * ACCEPTING NEW MEMBERS
- * ============================================================
+ * Accepting new members.
  */
 export function setAcceptingNewMembers(
   accepting
@@ -712,9 +611,7 @@ export function setAcceptingNewMembers(
 }
 
 /**
- * ============================================================
- * FILE SHARING
- * ============================================================
+ * File sharing controls.
  */
 export function setFileSharingEnabled(
   enabled
@@ -736,9 +633,7 @@ export function setFileSharingEnabled(
 }
 
 /**
- * ============================================================
- * MAX PARTICIPANTS
- * ============================================================
+ * Maximum participants.
  */
 export function setMaxParticipants(
   maxParticipants
@@ -772,9 +667,7 @@ export function setMaxParticipants(
 }
 
 /**
- * ============================================================
- * EXTEND EXPIRATION
- * ============================================================
+ * Extend room expiration.
  */
 export function extendExpiration(
   additionalSeconds
@@ -808,109 +701,23 @@ export function extendExpiration(
 }
 
 /**
- * ============================================================
- * DESTROY ROOM
- * ============================================================
- *
- * IMPORTANT:
- *
- * This waits for the backend acknowledgement.
- *
- * The backend should respond:
- *
- *   callback({
- *     ok: true
- *   });
- *
- * This prevents the frontend from assuming that the room
- * was destroyed before the backend actually processed it.
+ * Destroy the room.
  */
 export function destroyRoom() {
-  return new Promise(
-    (resolve, reject) => {
-      const activeSocket = socket;
+  if (
+    !socket ||
+    !socket.connected
+  ) {
+    return;
+  }
 
-      if (
-        !activeSocket ||
-        !activeSocket.connected
-      ) {
-        reject(
-          new Error(
-            'Socket is not connected'
-          )
-        );
-
-        return;
-      }
-
-      let finished = false;
-
-      const timeout =
-        setTimeout(() => {
-          if (finished) {
-            return;
-          }
-
-          finished = true;
-
-          reject(
-            new Error(
-              'Room destruction request timed out'
-            )
-          );
-        }, 10000);
-
-      const finish = (
-        callback
-      ) => {
-        if (finished) {
-          return;
-        }
-
-        finished = true;
-
-        clearTimeout(timeout);
-
-        callback();
-      };
-
-      /*
-       * IMPORTANT:
-       *
-       * Use the SAME socket that existed when
-       * destroyRoom() was called.
-       *
-       * This prevents a newly-created socket from
-       * accidentally receiving the old acknowledgement.
-       */
-      activeSocket.emit(
-        'room:destroy',
-        (response) => {
-          finish(() => {
-            if (
-              response?.ok
-            ) {
-              resolve(response);
-              return;
-            }
-
-            reject(
-              new Error(
-                response?.message ||
-                  'Failed to destroy room'
-              )
-            );
-          });
-        }
-      );
-    }
+  socket.emit(
+    'room:destroy'
   );
 }
 
 /**
- * ============================================================
- * REMOVE PARTICIPANT
- * ============================================================
+ * Remove a participant.
  */
 export function removeParticipant(
   sessionId
@@ -932,9 +739,7 @@ export function removeParticipant(
 }
 
 /**
- * ============================================================
- * CLEAR MESSAGES
- * ============================================================
+ * Clear all messages.
  */
 export function clearMessages() {
   if (
@@ -950,9 +755,7 @@ export function clearMessages() {
 }
 
 /**
- * ============================================================
- * GENERIC SOCKET EVENT LISTENER
- * ============================================================
+ * Generic socket event listener.
  */
 export function on(
   event,
@@ -962,15 +765,13 @@ export function on(
     return () => {};
   }
 
-  const activeSocket = socket;
-
-  activeSocket.on(
+  socket.on(
     event,
     handler
   );
 
   return () => {
-    activeSocket.off(
+    socket?.off(
       event,
       handler
     );
