@@ -14,18 +14,16 @@ import {
 } from '../services/socketService';
 
 /**
- * Manages the Socket.IO connection lifecycle.
+ * Manages the Socket.IO connection lifecycle for a room.
  *
- * PARTICIPANT:
- * - normal connection -> normal room join
- * - temporary disconnect -> reconnect/resume
- * - page reload -> reconnect using the same session
- * - file viewer -> reconnect when returning
- * - app switch -> reconnect
+ * Mobile browsers can temporarily disconnect while:
+ * - opening a file picker
+ * - selecting a file
+ * - opening a file viewer
+ * - switching applications
+ * - temporarily losing network connectivity
  *
- * HOST:
- * - server decides when the room is destroyed
- * - room:expired -> Home
+ * A temporary socket failure must NOT close the room.
  */
 export function useSocket({
   roomId,
@@ -34,47 +32,34 @@ export function useSocket({
 }) {
   const navigate = useNavigate();
 
-  const connectedRef = useRef(false);
+  const connectedRef =
+    useRef(false);
 
-  const redirectingRef = useRef(false);
+  const redirectingRef =
+    useRef(false);
 
-  const socketRef = useRef(null);
+  const socketRef =
+    useRef(null);
 
-  /*
-   * IMPORTANT:
-   *
-   * This is a FRONTEND lifecycle marker.
-   *
-   * false = this socket has never successfully connected
-   * true  = this socket connected at least once
-   *
-   * We use this to distinguish:
-   *
-   * First connection
-   *     ↓
-   * normal initial room join
-   *
-   * Later connection
-   *     ↓
-   * room resume
-   */
-  const hasConnectedOnceRef = useRef(false);
+  const redirectToHome =
+    useCallback(() => {
+      if (
+        redirectingRef.current
+      ) {
+        return;
+      }
 
-  const redirectToHome = useCallback(() => {
-    if (redirectingRef.current) {
-      return;
-    }
+      redirectingRef.current = true;
 
-    redirectingRef.current = true;
+      connectedRef.current =
+        false;
 
-    connectedRef.current = false;
+      disconnectSocket();
 
-    disconnectSocket();
-
-    navigate('/', {
-      replace: true,
-    });
-  }, [navigate]);
+      navigate('/', {
+        replace: true,
+      });
+    }, [navigate]);
 
   useEffect(() => {
     if (
@@ -85,211 +70,180 @@ export function useSocket({
       return undefined;
     }
 
-    redirectingRef.current = false;
+    redirectingRef.current =
+      false;
+
+    const socket =
+      connectSocket({
+        roomId,
+        sessionId,
+        key: roomKey,
+      });
+
+    socketRef.current =
+      socket;
+
+    const handleConnect =
+      () => {
+        console.log(
+          '[useSocket] Connected:',
+          socket.id
+        );
+
+        connectedRef.current =
+          true;
+      };
 
     /*
-     * Reset this for a completely new ChatRoomPage/socket lifecycle.
+     * IMPORTANT:
+     *
+     * A connect_error does NOT mean the room is gone.
+     *
+     * Mobile browsers can generate temporary connection
+     * failures while the user is using a file picker/viewer.
+     *
+     * Socket.IO will automatically retry.
      */
-    hasConnectedOnceRef.current = false;
+    const handleConnectError =
+      (error) => {
+        console.error(
+          '[useSocket] Connection error:',
+          error?.message ||
+            error
+        );
 
-    const socket = connectSocket({
-      roomId,
-      sessionId,
-      key: roomKey,
-    });
+        connectedRef.current =
+          false;
+      };
 
-    socketRef.current = socket;
-
-    // ------------------------------------------------
-    // Connect
-    // ------------------------------------------------
-
-    const handleConnect = () => {
-      console.log(
-        '[useSocket] Connected:',
-        socket.id
-      );
-
-      connectedRef.current = true;
-
-      /*
-       * FIRST successful connection:
-       *
-       * Do NOT send room:resume.
-       *
-       * This is the normal connection of the participant
-       * who has just joined through /api/rooms/join.
-       *
-       * The backend's normal socket connection flow handles
-       * the initial presence announcement.
-       */
-      if (!hasConnectedOnceRef.current) {
-        hasConnectedOnceRef.current = true;
-
+    /*
+     * These are explicit server events saying that the
+     * room is no longer available.
+     */
+    const handleRoomExpired =
+      () => {
         console.log(
-          '[useSocket] Initial socket connection'
+          '[useSocket] Room expired'
         );
 
-        return;
-      }
-
-      /*
-       * SECOND/subsequent successful connection:
-       *
-       * The existing session is reconnecting.
-       *
-       * Tell the backend to restore the participant's
-       * active socket presence.
-       *
-       * roomEvents.js must NOT create a chat "joined"
-       * system message for this resume.
-       */
-      console.log(
-        '[useSocket] Reconnecting existing session'
-      );
-
-      socket.emit('room:resume');
-    };
-
-    // ------------------------------------------------
-    // Connection error
-    // ------------------------------------------------
-
-    const handleConnectError = (error) => {
-      console.error(
-        '[useSocket] Connection error:',
-        error?.message || error
-      );
-
-      connectedRef.current = false;
-    };
-
-    // ------------------------------------------------
-    // Room expired
-    // ------------------------------------------------
-
-    const handleRoomExpired = () => {
-      console.log(
-        '[useSocket] Room expired'
-      );
-
-      redirectToHome();
-    };
-
-    // ------------------------------------------------
-    // Removed from room
-    // ------------------------------------------------
-
-    const handleRoomRemoved = () => {
-      console.log(
-        '[useSocket] Removed from room'
-      );
-
-      redirectToHome();
-    };
-
-    // ------------------------------------------------
-    // Server connection error
-    // ------------------------------------------------
-
-    const handleConnectionError = (payload) => {
-      console.error(
-        '[useSocket] Server connection error:',
-        payload?.message || payload
-      );
-
-      const message = String(
-        payload?.message || ''
-      ).toLowerCase();
-
-      const invalidSession =
-        message.includes(
-          'invalid or expired session'
-        ) ||
-        message.includes(
-          'missing room or session credentials'
-        );
-
-      /*
-       * A permanently invalid session should leave
-       * the room.
-       *
-       * Temporary disconnects do NOT come here.
-       */
-      if (invalidSession) {
         redirectToHome();
-      }
-    };
+      };
 
-    // ------------------------------------------------
-    // Disconnect
-    // ------------------------------------------------
-
-    const handleDisconnect = (reason) => {
-      console.log(
-        '[useSocket] Disconnected:',
-        reason
-      );
-
-      connectedRef.current = false;
-    };
-
-    // ------------------------------------------------
-    // Visibility
-    // ------------------------------------------------
-
-    const handleVisibilityChange = () => {
-      if (
-        document.visibilityState ===
-        'visible'
-      ) {
+    const handleRoomRemoved =
+      () => {
         console.log(
-          '[useSocket] Page became visible'
+          '[useSocket] Removed from room'
+        );
+
+        redirectToHome();
+      };
+
+    /*
+     * Only explicit authentication/session rejection
+     * should cause us to leave the room.
+     *
+     * Do NOT treat every temporary connection error
+     * as a session failure.
+     */
+    const handleConnectionError =
+      (payload) => {
+        console.error(
+          '[useSocket] Server connection error:',
+          payload?.message ||
+            payload
+        );
+
+        const message =
+          String(
+            payload?.message ||
+              ''
+          ).toLowerCase();
+
+        const invalidSession =
+          message.includes(
+            'invalid or expired session'
+          ) ||
+          message.includes(
+            'missing room or session credentials'
+          );
+
+        if (
+          invalidSession
+        ) {
+          redirectToHome();
+        }
+      };
+
+    const handleDisconnect =
+      (reason) => {
+        console.log(
+          '[useSocket] Disconnected:',
+          reason
+        );
+
+        connectedRef.current =
+          false;
+      };
+
+    /*
+     * Android/iOS:
+     *
+     * The browser may become hidden while the user
+     * selects or views a file.
+     *
+     * When it becomes visible again, explicitly ask
+     * the existing socket to reconnect.
+     */
+    const handleVisibilityChange =
+      () => {
+        if (
+          document.visibilityState ===
+          'visible'
+        ) {
+          console.log(
+            '[useSocket] Page became visible'
+          );
+
+          reconnectSocket();
+        }
+      };
+
+    /*
+     * iOS Safari can restore pages through BFCache.
+     */
+    const handlePageShow =
+      () => {
+        console.log(
+          '[useSocket] Page shown'
         );
 
         reconnectSocket();
-      }
-    };
+      };
 
-    // ------------------------------------------------
-    // BFCache / pageshow
-    // ------------------------------------------------
+    /*
+     * Useful when returning from another application
+     * or a native file picker.
+     */
+    const handleFocus =
+      () => {
+        console.log(
+          '[useSocket] Window focused'
+        );
 
-    const handlePageShow = () => {
-      console.log(
-        '[useSocket] Page shown'
-      );
+        reconnectSocket();
+      };
 
-      reconnectSocket();
-    };
+    /*
+     * Network connection came back.
+     */
+    const handleOnline =
+      () => {
+        console.log(
+          '[useSocket] Browser online'
+        );
 
-    // ------------------------------------------------
-    // Window focus
-    // ------------------------------------------------
-
-    const handleFocus = () => {
-      console.log(
-        '[useSocket] Window focused'
-      );
-
-      reconnectSocket();
-    };
-
-    // ------------------------------------------------
-    // Browser online
-    // ------------------------------------------------
-
-    const handleOnline = () => {
-      console.log(
-        '[useSocket] Browser online'
-      );
-
-      reconnectSocket();
-    };
-
-    // ------------------------------------------------
-    // Attach listeners
-    // ------------------------------------------------
+        reconnectSocket();
+      };
 
     socket.on(
       'connect',
@@ -341,32 +295,14 @@ export function useSocket({
       handleOnline
     );
 
-    // ------------------------------------------------
-    // Already connected
-    // ------------------------------------------------
-
     /*
-     * connectSocket() normally returns a socket that is not
-     * connected yet.
-     *
-     * If it is already connected, treat this as the initial
-     * connection for this hook lifecycle.
-     *
-     * IMPORTANT:
-     * Do NOT emit room:resume here.
+     * The socket may already be connected by the time
+     * our listeners are attached.
      */
     if (socket.connected) {
-      connectedRef.current = true;
-      hasConnectedOnceRef.current = true;
-
-      console.log(
-        '[useSocket] Socket was already connected'
-      );
+      connectedRef.current =
+        true;
     }
-
-    // ------------------------------------------------
-    // Cleanup
-    // ------------------------------------------------
 
     return () => {
       socket.off(
@@ -419,27 +355,19 @@ export function useSocket({
         handleOnline
       );
 
-      connectedRef.current = false;
+      connectedRef.current =
+        false;
 
       /*
-       * IMPORTANT:
-       *
-       * Do NOT manually emit room:leave here.
-       *
-       * React cleanup can happen during:
-       *
-       * - reload
-       * - route changes
-       * - mobile lifecycle changes
-       * - file viewer
-       * - app switching
-       *
-       * The backend handles the socket disconnect.
+       * Only disconnect the socket that belongs
+       * to this hook.
        */
       if (
-        socketRef.current === socket
+        socketRef.current ===
+        socket
       ) {
-        socketRef.current = null;
+        socketRef.current =
+          null;
 
         disconnectSocket();
       }
@@ -451,26 +379,27 @@ export function useSocket({
     redirectToHome,
   ]);
 
-  // --------------------------------------------------
-  // Send message
-  // --------------------------------------------------
-
-  const send = useCallback(
-    async (
-      plaintext,
-      replyTo
-    ) => {
-      return sendEncryptedMessage(
+  const send =
+    useCallback(
+      async (
         plaintext,
         replyTo
-      );
-    },
-    []
-  );
+      ) => {
+        /*
+         * sendMessage() has its own wait-for-connection
+         * logic, so don't reject merely because the socket
+         * is currently reconnecting.
+         */
+        return sendEncryptedMessage(
+          plaintext,
+          replyTo
+        );
+      },
+      []
+    );
 
   return {
     send,
-
     isConnected:
       connectedRef.current,
   };
