@@ -364,33 +364,33 @@ function registerRoomEvents(io, socket) {
         }
 
         /*
-         * 4. Tell EVERYONE that the room has
-         * permanently expired/destroyed.
+         * 4. Tell EVERYONE immediately that the room
+         * has permanently expired/destroyed.
          */
         io.to(roomId).emit(
           'room:expired'
         );
 
         /*
-         * 5. Give the room:expired event a moment
-         * to reach all clients before disconnecting.
+         * 5. Immediately disconnect everyone.
+         *
+         * NO setTimeout.
+         * NO 500ms delay.
          */
-        setTimeout(() => {
-          try {
-            io.in(roomId).disconnectSockets(
-              true
-            );
-          } catch (disconnectError) {
-            logger.warn(
-              'Failed to disconnect destroyed room sockets',
-              {
-                roomId,
-                error:
-                  disconnectError.message,
-              }
-            );
-          }
-        }, 500);
+        try {
+          io.in(roomId).disconnectSockets(
+            true
+          );
+        } catch (disconnectError) {
+          logger.warn(
+            'Failed to disconnect destroyed room sockets',
+            {
+              roomId,
+              error:
+                disconnectError.message,
+            }
+          );
+        }
 
         logger.info(
           'Room explicitly destroyed',
@@ -463,6 +463,9 @@ function registerRoomEvents(io, socket) {
             'room:expired'
           );
 
+          /*
+           * Immediately disconnect everyone.
+           */
           io.in(roomId).disconnectSockets(
             true
           );
@@ -601,7 +604,8 @@ function registerRoomEvents(io, socket) {
             );
 
             /*
-             * Tell EVERYONE that the room is closed.
+             * Tell EVERYONE immediately that the room
+             * is closed.
              *
              * RoomContext already handles room:expired
              * and redirects to the home page.
@@ -642,7 +646,7 @@ function registerRoomEvents(io, socket) {
 
         /*
          * Remove the participant's session from the
-         * backend.
+         * backend immediately.
          */
         try {
           sessionManager.destroySession(
@@ -661,8 +665,8 @@ function registerRoomEvents(io, socket) {
         }
 
         /*
-         * Tell the remaining participants that this
-         * participant has left.
+         * Immediately tell the remaining participants
+         * that this participant has left.
          */
         socket.to(roomId).emit(
           'room:user-left',
