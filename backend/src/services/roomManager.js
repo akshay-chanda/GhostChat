@@ -27,6 +27,87 @@ const {
   ROOM_DURATIONS_SECONDS,
 } = require('../utils/constants');
 
+/*
+ * Per-room join locks.
+ *
+ * JavaScript is single-threaded, but joinRoom() contains
+ * asynchronous password verification. Two join requests can
+ * therefore reach the participant-count check at the same
+ * time unless the critical section is protected.
+ *
+ * The lock only protects the short section where:
+ *
+ *   1. Room state is re-read.
+ *   2. Capacity is checked.
+ *   3. Participant is created.
+ *   4. Participant is added.
+ *
+ * This prevents simultaneous joins from exceeding
+ * room.maxParticipants.
+ */
+const joinLocks = new Map();
+
+/**
+ * Run an asynchronous operation while holding a per-room lock.
+ *
+ * Different rooms can still process joins independently.
+ * Only joins for the same room are serialized.
+ */
+async function withRoomJoinLock(
+  roomId,
+  operation
+) {
+  const previousLock =
+    joinLocks.get(roomId) ||
+    Promise.resolve();
+
+  let releaseLock;
+
+  const currentLock =
+    new Promise((resolve) => {
+      releaseLock = resolve;
+    });
+
+  joinLocks.set(
+    roomId,
+    previousLock.then(
+      () => currentLock
+    )
+  );
+
+  /*
+   * Wait until all previous joins for this room
+   * have completed.
+   */
+  await previousLock;
+
+  try {
+    return await operation();
+  } finally {
+    /*
+     * Allow the next waiting join to continue.
+     */
+    releaseLock();
+
+    /*
+     * Remove the lock entry when this is still
+     * the latest lock for this room.
+     *
+     * This avoids deleting a newer lock created
+     * by a later request.
+     */
+    const latestLock =
+      joinLocks.get(roomId);
+
+    if (
+      latestLock ===
+      currentLock
+    ) {
+      joinLocks.delete(roomId);
+    }
+  }
+}
+
 /**
  * Generate a public participant identifier.
  *
@@ -67,7 +148,10 @@ function unauthorizedError(
  *
  * room.ownerId contains the owner's private sessionId.
  */
-function assertOwner(room, sessionId) {
+function assertOwner(
+  room,
+  sessionId
+) {
   if (
     !room ||
     !sessionId ||
@@ -90,35 +174,47 @@ async function createRoom({
   const roomId = generateRoomId();
 
   // PRIVATE authentication values.
-  const ownerSessionId = generateSessionId();
-  const ownerSessionSecret = generateSessionSecret();
+  const ownerSessionId =
+    generateSessionId();
+
+  const ownerSessionSecret =
+    generateSessionSecret();
 
   // PUBLIC participant identifier.
-  const ownerParticipantId = generateParticipantId();
+  const ownerParticipantId =
+    generateParticipantId();
 
-  const anonymousName = generateAnonymousName();
+  const anonymousName =
+    generateAnonymousName();
 
   const safeDuration =
-    ROOM_DURATIONS_SECONDS.includes(duration)
+    ROOM_DURATIONS_SECONDS.includes(
+      duration
+    )
       ? duration
       : 1800;
 
   const requestedMaxParticipants =
     Number(maxParticipants);
 
-  const safeMaxParticipants = Math.min(
-    Math.max(
-      Number.isFinite(requestedMaxParticipants)
-        ? requestedMaxParticipants
-        : DEFAULT_MAX_PARTICIPANTS,
-      2
-    ),
-    HARD_MAX_PARTICIPANTS
-  );
+  const safeMaxParticipants =
+    Math.min(
+      Math.max(
+        Number.isFinite(
+          requestedMaxParticipants
+        )
+          ? requestedMaxParticipants
+          : DEFAULT_MAX_PARTICIPANTS,
+        2
+      ),
+      HARD_MAX_PARTICIPANTS
+    );
 
-  const expiresAt = new Date(
-    Date.now() + safeDuration * 1000
-  ).toISOString();
+  const expiresAt =
+    new Date(
+      Date.now() +
+        safeDuration * 1000
+    ).toISOString();
 
   /**
    * ownerId is PRIVATE and contains the
@@ -128,34 +224,48 @@ async function createRoom({
     roomId,
     roomName,
     passwordHash,
-    ownerId: ownerSessionId,
-    maxParticipants: safeMaxParticipants,
-    allowFileSharing: allowFileSharing !== false,
+    ownerId:
+      ownerSessionId,
+    maxParticipants:
+      safeMaxParticipants,
+    allowFileSharing:
+      allowFileSharing !== false,
     expiresAt,
   });
 
   store.createRoom(room);
 
-  const owner = createParticipant({
-    sessionId: ownerSessionId,
-    sessionSecret: ownerSessionSecret,
-    participantId: ownerParticipantId,
-    anonymousName,
-    isOwner: true,
-  });
+  const owner =
+    createParticipant({
+      sessionId:
+        ownerSessionId,
+      sessionSecret:
+        ownerSessionSecret,
+      participantId:
+        ownerParticipantId,
+      anonymousName,
+      isOwner: true,
+    });
 
-  store.addParticipant(roomId, owner);
+  store.addParticipant(
+    roomId,
+    owner
+  );
 
   expirationService.schedule(
     roomId,
     expiresAt,
-    () => destroyRoomInternal(roomId)
+    () =>
+      destroyRoomInternal(
+        roomId
+      )
   );
 
   return {
     room,
     owner,
-    sessionSecret: ownerSessionSecret,
+    sessionSecret:
+      ownerSessionSecret,
   };
 }
 
@@ -166,9 +276,17 @@ async function joinRoom({
   roomId,
   password,
 }) {
-  const room = store.getRoom(roomId);
+  /*
+   * Perform the initial room lookup and password
+   * verification before acquiring the room lock.
+   *
+   * Password verification is intentionally outside
+   * the critical section because it can be expensive.
+   */
+  const initialRoom =
+    store.getRoom(roomId);
 
-  if (!room) {
+  if (!initialRoom) {
     return {
       ok: false,
       reason: 'notFound',
@@ -178,7 +296,7 @@ async function joinRoom({
   const passwordValid =
     await passwordService.verifyPassword(
       password,
-      room.passwordHash
+      initialRoom.passwordHash
     );
 
   // Prevent room enumeration.
@@ -189,62 +307,117 @@ async function joinRoom({
     };
   }
 
-  if (
-    room.locked ||
-    !room.acceptingNewMembers
-  ) {
-    return {
-      ok: false,
-      reason: 'locked',
-    };
-  }
-
-  const currentParticipants =
-    store.getParticipants(roomId);
-
-  if (
-    currentParticipants.length >=
-    room.maxParticipants
-  ) {
-    return {
-      ok: false,
-      reason: 'full',
-    };
-  }
-
-  // PRIVATE authentication values.
-  const sessionId = generateSessionId();
-  const sessionSecret = generateSessionSecret();
-
-  // PUBLIC participant identifier.
-  const participantId = generateParticipantId();
-
-  const anonymousName =
-    generateAnonymousName(
-      currentParticipants.map(
-        (participant) =>
-          participant.anonymousName
-      )
-    );
-
-  const participant = createParticipant({
-    sessionId,
-    sessionSecret,
-    participantId,
-    anonymousName,
-    isOwner: false,
-  });
-
-  store.addParticipant(
+  /*
+   * Serialize only the state-changing portion
+   * of the join operation.
+   */
+  return withRoomJoinLock(
     roomId,
-    participant
-  );
+    async () => {
+      /*
+       * IMPORTANT:
+       *
+       * Re-read the room after acquiring the lock.
+       *
+       * The room may have been destroyed, locked,
+       * or otherwise changed while password verification
+       * was running.
+       */
+      const room =
+        store.getRoom(roomId);
 
-  return {
-    ok: true,
-    participant,
-    sessionSecret,
-  };
+      if (!room) {
+        return {
+          ok: false,
+          reason: 'notFound',
+        };
+      }
+
+      /*
+       * Check room state again while holding
+       * the lock.
+       */
+      if (
+        room.locked ||
+        !room.acceptingNewMembers
+      ) {
+        return {
+          ok: false,
+          reason: 'locked',
+        };
+      }
+
+      /*
+       * CRITICAL CAPACITY CHECK.
+       *
+       * Because this code is inside the per-room
+       * join lock, another simultaneous join cannot
+       * modify the participant count between this
+       * check and store.addParticipant().
+       */
+      const currentParticipants =
+        store.getParticipants(
+          roomId
+        );
+
+      if (
+        currentParticipants.length >=
+        room.maxParticipants
+      ) {
+        return {
+          ok: false,
+          reason: 'full',
+        };
+      }
+
+      // PRIVATE authentication values.
+      const sessionId =
+        generateSessionId();
+
+      const sessionSecret =
+        generateSessionSecret();
+
+      // PUBLIC participant identifier.
+      const participantId =
+        generateParticipantId();
+
+      const anonymousName =
+        generateAnonymousName(
+          currentParticipants.map(
+            (participant) =>
+              participant.anonymousName
+          )
+        );
+
+      const participant =
+        createParticipant({
+          sessionId,
+          sessionSecret,
+          participantId,
+          anonymousName,
+          isOwner: false,
+        });
+
+      /*
+       * This add happens while the room join lock
+       * is still held.
+       *
+       * Therefore another simultaneous join cannot
+       * pass the capacity check until this participant
+       * has already been added.
+       */
+      store.addParticipant(
+        roomId,
+        participant
+      );
+
+      return {
+        ok: true,
+        participant,
+        sessionSecret,
+      };
+    }
+  );
 }
 
 /**
@@ -254,24 +427,31 @@ async function joinRoom({
  * room.ownerId contains the owner's PRIVATE
  * sessionId and must never be returned.
  */
-function getPublicRoomInfo(roomId) {
-  const room = store.getRoom(roomId);
+function getPublicRoomInfo(
+  roomId
+) {
+  const room =
+    store.getRoom(roomId);
 
   if (!room) {
     return null;
   }
 
   const participants =
-    store.getParticipants(roomId);
+    store.getParticipants(
+      roomId
+    );
 
   const ownerParticipant =
     participants.find(
       (participant) =>
-        participant.sessionId === room.ownerId
+        participant.sessionId ===
+        room.ownerId
     );
 
   const ownerParticipantId =
-    ownerParticipant?.participantId || null;
+    ownerParticipant?.participantId ||
+    null;
 
   return toPublicRoom(
     room,
@@ -288,17 +468,24 @@ function setLocked(
   sessionId,
   locked
 ) {
-  const room = store.getRoom(roomId);
+  const room =
+    store.getRoom(roomId);
 
   if (!room) {
     return;
   }
 
-  assertOwner(room, sessionId);
+  assertOwner(
+    room,
+    sessionId
+  );
 
-  store.updateRoom(roomId, {
-    locked: Boolean(locked),
-  });
+  store.updateRoom(
+    roomId,
+    {
+      locked: Boolean(locked),
+    }
+  );
 }
 
 /**
@@ -309,18 +496,25 @@ function setAcceptingNewMembers(
   sessionId,
   accepting
 ) {
-  const room = store.getRoom(roomId);
+  const room =
+    store.getRoom(roomId);
 
   if (!room) {
     return;
   }
 
-  assertOwner(room, sessionId);
+  assertOwner(
+    room,
+    sessionId
+  );
 
-  store.updateRoom(roomId, {
-    acceptingNewMembers:
-      Boolean(accepting),
-  });
+  store.updateRoom(
+    roomId,
+    {
+      acceptingNewMembers:
+        Boolean(accepting),
+    }
+  );
 }
 
 /**
@@ -331,18 +525,25 @@ function setFileSharingEnabled(
   sessionId,
   enabled
 ) {
-  const room = store.getRoom(roomId);
+  const room =
+    store.getRoom(roomId);
 
   if (!room) {
     return;
   }
 
-  assertOwner(room, sessionId);
+  assertOwner(
+    room,
+    sessionId
+  );
 
-  store.updateRoom(roomId, {
-    fileSharingEnabled:
-      Boolean(enabled),
-  });
+  store.updateRoom(
+    roomId,
+    {
+      fileSharingEnabled:
+        Boolean(enabled),
+    }
+  );
 }
 
 /**
@@ -353,13 +554,17 @@ function setMaxParticipants(
   sessionId,
   maxParticipants
 ) {
-  const room = store.getRoom(roomId);
+  const room =
+    store.getRoom(roomId);
 
   if (!room) {
     return;
   }
 
-  assertOwner(room, sessionId);
+  assertOwner(
+    room,
+    sessionId
+  );
 
   const parsedMaxParticipants =
     Number(maxParticipants);
@@ -383,10 +588,13 @@ function setMaxParticipants(
       HARD_MAX_PARTICIPANTS
     );
 
-  store.updateRoom(roomId, {
-    maxParticipants:
-      clampedMaxParticipants,
-  });
+  store.updateRoom(
+    roomId,
+    {
+      maxParticipants:
+        clampedMaxParticipants,
+    }
+  );
 }
 
 /**
@@ -397,13 +605,17 @@ function extendExpiration(
   sessionId,
   additionalSeconds
 ) {
-  const room = store.getRoom(roomId);
+  const room =
+    store.getRoom(roomId);
 
   if (!room) {
     return;
   }
 
-  assertOwner(room, sessionId);
+  assertOwner(
+    room,
+    sessionId
+  );
 
   const safeAdditionalSeconds =
     Number(additionalSeconds);
@@ -421,18 +633,28 @@ function extendExpiration(
 
   const newExpiresAt =
     new Date(
-      new Date(room.expiresAt).getTime() +
-        safeAdditionalSeconds * 1000
+      new Date(
+        room.expiresAt
+      ).getTime() +
+        safeAdditionalSeconds *
+          1000
     ).toISOString();
 
-  store.updateRoom(roomId, {
-    expiresAt: newExpiresAt,
-  });
+  store.updateRoom(
+    roomId,
+    {
+      expiresAt:
+        newExpiresAt,
+    }
+  );
 
   expirationService.schedule(
     roomId,
     newExpiresAt,
-    () => destroyRoomInternal(roomId)
+    () =>
+      destroyRoomInternal(
+        roomId
+      )
   );
 
   return newExpiresAt;
@@ -452,7 +674,8 @@ function removeParticipant(
   requesterSessionId,
   targetParticipantId
 ) {
-  const room = store.getRoom(roomId);
+  const room =
+    store.getRoom(roomId);
 
   if (!room) {
     return;
@@ -470,7 +693,9 @@ function removeParticipant(
   }
 
   const participants =
-    store.getParticipants(roomId);
+    store.getParticipants(
+      roomId
+    );
 
   const targetParticipant =
     participants.find(
@@ -509,7 +734,8 @@ function destroyRoom(
   roomId,
   sessionId
 ) {
-  const room = store.getRoom(roomId);
+  const room =
+    store.getRoom(roomId);
 
   if (!room) {
     return false;
@@ -520,7 +746,9 @@ function destroyRoom(
     sessionId
   );
 
-  return destroyRoomInternal(roomId);
+  return destroyRoomInternal(
+    roomId
+  );
 }
 
 /**
@@ -535,11 +763,16 @@ function destroyRoom(
  * filesystem cleanup does not need to block room
  * destruction.
  */
-function destroyRoomInternal(roomId) {
-  const room = store.getRoom(roomId);
+function destroyRoomInternal(
+  roomId
+) {
+  const room =
+    store.getRoom(roomId);
 
   // Always cancel the expiration timer.
-  expirationService.cancel(roomId);
+  expirationService.cancel(
+    roomId
+  );
 
   // Already destroyed.
   if (!room) {
@@ -555,7 +788,9 @@ function destroyRoomInternal(roomId) {
    *
    * return null immediately after destruction.
    */
-  store.deleteRoom(roomId);
+  store.deleteRoom(
+    roomId
+  );
 
   /**
    * Delete temporary encrypted files.
@@ -566,7 +801,9 @@ function destroyRoomInternal(roomId) {
    * filesystem cleanup.
    */
   Promise.resolve(
-    fileStorageService.deleteRoomFiles(roomId)
+    fileStorageService.deleteRoomFiles(
+      roomId
+    )
   ).catch((error) => {
     console.error(
       `Failed to delete files for room ${roomId}:`,
@@ -584,12 +821,14 @@ function isOwner(
   roomId,
   sessionId
 ) {
-  const room = store.getRoom(roomId);
+  const room =
+    store.getRoom(roomId);
 
   return Boolean(
     room &&
     sessionId &&
-    room.ownerId === sessionId
+    room.ownerId ===
+      sessionId
   );
 }
 

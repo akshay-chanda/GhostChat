@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../utils/constants';
+
 import {
   encryptFile,
   decryptFile,
@@ -14,14 +15,6 @@ import {
  *
  * 2. Relative API base:
  *    /api
- *
- * Examples:
- *
- *   /api/rooms/ABC/files/123/download
- *   -> https://ghostchat-backend-redk.onrender.com/api/rooms/ABC/files/123/download
- *
- *   https://ghostchat-backend-redk.onrender.com/api/rooms/ABC/files/123/download
- *   -> unchanged
  */
 function getAbsoluteDownloadUrl(downloadUrl) {
   if (!downloadUrl) {
@@ -40,17 +33,6 @@ function getAbsoluteDownloadUrl(downloadUrl) {
 
   /*
    * Resolve the configured API base safely.
-   *
-   * API_BASE_URL may be:
-   *
-   *   https://ghostchat-backend-redk.onrender.com/api
-   *
-   * or:
-   *
-   *   /api
-   *
-   * A relative API base must be resolved against the
-   * current frontend origin first.
    */
   const apiBaseUrl = new URL(
     API_BASE_URL,
@@ -58,11 +40,7 @@ function getAbsoluteDownloadUrl(downloadUrl) {
   );
 
   /*
-   * If the backend returns an absolute-path URL such as:
-   *
-   * /api/rooms/ABC/files/123/download
-   *
-   * preserve the complete path and use the backend origin.
+   * Backend returned an absolute path.
    */
   if (downloadUrl.startsWith('/')) {
     return new URL(
@@ -72,11 +50,7 @@ function getAbsoluteDownloadUrl(downloadUrl) {
   }
 
   /*
-   * If the backend returns a relative path such as:
-   *
-   * rooms/ABC/files/123/download
-   *
-   * resolve it against the configured API base.
+   * Backend returned a relative path.
    */
   return new URL(
     downloadUrl,
@@ -86,6 +60,13 @@ function getAbsoluteDownloadUrl(downloadUrl) {
 
 /**
  * Upload an encrypted file.
+ *
+ * Authentication uses private HTTP headers:
+ *
+ *   X-Session-Id
+ *   X-Session-Secret
+ *
+ * No cookies are used.
  */
 export function uploadFile({
   roomId,
@@ -159,10 +140,21 @@ export function uploadFile({
 
         xhr.open(
           'POST',
-          `${API_BASE_URL}/rooms/${roomId}/files`
+          `${API_BASE_URL}/rooms/${encodeURIComponent(
+            roomId
+          )}/files`
         );
 
-        xhr.withCredentials = true;
+        /*
+         * IMPORTANT:
+         *
+         * Do NOT use:
+         *
+         *   xhr.withCredentials = true
+         *
+         * Authentication is handled entirely through
+         * X-Session-Id and X-Session-Secret.
+         */
 
         if (sessionId) {
           xhr.setRequestHeader(
@@ -254,6 +246,13 @@ export function uploadFile({
  * Download an encrypted file from the backend
  * and decrypt it using the room encryption key.
  *
+ * Authentication uses:
+ *
+ *   X-Session-Id
+ *   X-Session-Secret
+ *
+ * No cookies are used.
+ *
  * Returns:
  *   Blob
  */
@@ -283,12 +282,6 @@ export async function downloadAndDecryptFile({
     );
   }
 
-  /*
-   * The backend may return a relative URL.
-   *
-   * This helper handles both absolute and relative
-   * API_BASE_URL values.
-   */
   const absoluteDownloadUrl =
     getAbsoluteDownloadUrl(
       downloadUrl
@@ -313,7 +306,6 @@ export async function downloadAndDecryptFile({
       absoluteDownloadUrl,
       {
         method: 'GET',
-        credentials: 'include',
         headers,
       }
     );
@@ -403,6 +395,9 @@ export async function downloadAndDecryptFile({
 
 /**
  * Delete a file from the backend.
+ *
+ * Authentication uses private headers.
+ * No cookies are used.
  */
 export async function deleteFile(
   fileId,
@@ -431,10 +426,11 @@ export async function deleteFile(
 
   const response =
     await fetch(
-      `${API_BASE_URL}/files/${fileId}`,
+      `${API_BASE_URL}/files/${encodeURIComponent(
+        fileId
+      )}`,
       {
         method: 'DELETE',
-        credentials: 'include',
         headers,
       }
     );

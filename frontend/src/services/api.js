@@ -1,63 +1,133 @@
 import { API_BASE_URL } from '../utils/constants';
 
-/**
- * Read the current private session credentials for authenticated
- * HTTP requests.
+/*
+ * --------------------------------------------------
+ * In-memory session credentials
+ * --------------------------------------------------
  *
  * SECURITY:
- * - sessionId is private.
- * - sessionSecret is private.
- * - participantId is NOT used for authentication.
  *
- * Credentials are sent only as HTTP headers. They are never added
- * to request bodies or URLs.
+ * sessionId:
+ *   Private authentication credential.
+ *
+ * sessionSecret:
+ *   Private authentication credential.
+ *
+ * These values are intentionally kept only in JavaScript
+ * memory.
+ *
+ * They are NOT stored in:
+ *
+ *   - localStorage
+ *   - sessionStorage
+ *   - URL parameters
+ *   - request bodies
+ *   - cookies
+ *
+ * The values disappear when the page is refreshed or
+ * the application is closed.
  */
-function getSessionCredentials() {
-  try {
-    const pathname = window.location.pathname;
 
-    const roomMatch =
-      pathname.match(/^\/room\/([^/]+)/);
+let sessionCredentials = null;
 
-    if (!roomMatch) {
-      return null;
-    }
-
-    const roomId = roomMatch[1];
-
-    const raw =
-      sessionStorage.getItem(
-        `ghostchat-session-${roomId}`
-      );
-
-    if (!raw) {
-      return null;
-    }
-
-    const session = JSON.parse(raw);
-
-    if (
-      !session?.sessionId ||
-      !session?.sessionSecret
-    ) {
-      return null;
-    }
-
-    return {
-      sessionId: session.sessionId,
-      sessionSecret: session.sessionSecret,
-    };
-  } catch {
-    return null;
+/**
+ * Store the current private session credentials
+ * in memory for authenticated HTTP requests.
+ *
+ * @param {string} sessionId
+ * @param {string} sessionSecret
+ */
+export function setSessionCredentials(
+  sessionId,
+  sessionSecret
+) {
+  if (
+    typeof sessionId !== 'string' ||
+    !sessionId ||
+    typeof sessionSecret !== 'string' ||
+    !sessionSecret
+  ) {
+    sessionCredentials = null;
+    return;
   }
+
+  sessionCredentials = {
+    sessionId,
+    sessionSecret,
+  };
 }
 
 /**
- * Thin fetch wrapper. Throws an Error with a `.status` property on
- * any non-2xx response so callers (see JoinRoomForm's err.status
- * checks) can branch on status codes without re-parsing the response
- * themselves. Never logs request/response bodies — they may contain
- * room passwords.
+ * Clear the current private session credentials
+ * from application memory.
+ */
+export function clearSessionCredentials() {
+  sessionCredentials = null;
+}
+
+/**
+ * Read the current private session credentials.
+ *
+ * This function returns a copy so callers cannot
+ * directly mutate the internal object.
+ */
+function getSessionCredentials() {
+  if (
+    !sessionCredentials?.sessionId ||
+    !sessionCredentials?.sessionSecret
+  ) {
+    return null;
+  }
+
+  return {
+    sessionId: sessionCredentials.sessionId,
+    sessionSecret:
+      sessionCredentials.sessionSecret,
+  };
+}
+
+/**
+ * Build authentication headers for an HTTP request.
+ *
+ * Authentication is explicitly header-based.
+ *
+ * This avoids relying on cookies across:
+ *
+ *   Vercel frontend
+ *        ↓
+ *   Render backend
+ *
+ * Credentials are never placed in:
+ *
+ *   - URLs
+ *   - query parameters
+ *   - request bodies
+ */
+function getAuthHeaders() {
+  const session =
+    getSessionCredentials();
+
+  if (!session) {
+    return {};
+  }
+
+  return {
+    'X-Session-Id':
+      session.sessionId,
+
+    'X-Session-Secret':
+      session.sessionSecret,
+  };
+}
+
+/**
+ * Thin fetch wrapper.
+ *
+ * Throws an Error with a `.status` property on
+ * non-2xx responses.
+ *
+ * Request and response bodies are never logged because
+ * they may contain sensitive room information.
  */
 async function request(
   path,
@@ -67,34 +137,42 @@ async function request(
     headers = {},
   } = {}
 ) {
-  const session =
-    getSessionCredentials();
+  const authHeaders =
+    getAuthHeaders();
 
-  const authHeaders = {};
+  const requestHeaders = {
+    'Content-Type':
+      'application/json',
 
-  if (session) {
-    authHeaders['X-Session-Id'] =
-      session.sessionId;
-
-    authHeaders['X-Session-Secret'] =
-      session.sessionSecret;
-  }
+    ...authHeaders,
+    ...headers,
+  };
 
   const response = await fetch(
     `${API_BASE_URL}${path}`,
     {
       method,
-      headers: {
-        'Content-Type':
-          'application/json',
+      headers: requestHeaders,
 
-        ...authHeaders,
-        ...headers,
-      },
-      credentials: 'include',
-      body: body
-        ? JSON.stringify(body)
-        : undefined,
+      /*
+       * IMPORTANT:
+       *
+       * Do NOT use:
+       *
+       *   credentials: 'include'
+       *
+       * Authentication is handled explicitly through
+       * X-Session-Id and X-Session-Secret headers.
+       *
+       * This avoids cross-origin cookie problems between
+       * Vercel and Render.
+       */
+
+      body:
+        body !== undefined &&
+        body !== null
+          ? JSON.stringify(body)
+          : undefined,
     }
   );
 
@@ -129,6 +207,9 @@ async function request(
   return data;
 }
 
+/**
+ * Public API wrapper.
+ */
 export const api = {
   get: (path) =>
     request(path),

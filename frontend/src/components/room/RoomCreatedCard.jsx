@@ -1,29 +1,30 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Copy, Check, QrCode } from 'lucide-react';
+import {
+  Copy,
+  Check,
+  QrCode,
+  Share2,
+} from 'lucide-react';
 
 /**
  * RoomCreatedCard
  *
- * Shown immediately after room creation.
+ * Displays the room credentials and the temporary
+ * frontend invitation link returned by the backend.
  *
- * The share URL contains:
+ * Expected shareLink:
  *
- *   /join?room=ROOM_ID&password=PASSWORD
+ *   http://localhost:5173/join?invite=TOKEN
  *
- * This allows the Join Room page to automatically
- * fill in the Room ID and Password.
+ * or production:
+ *
+ *   https://ghost-chat-akshay.vercel.app/join?invite=TOKEN
  *
  * IMPORTANT:
- * The private session credentials are NEVER included
- * in the share URL or QR code.
- *
- * Private:
- *   sessionId
- *   sessionSecret
- *
- * Public:
- *   participantId
+ * - Password is NOT included in the URL.
+ * - sessionId/sessionSecret are NOT included in the URL.
+ * - The exact same shareLink is used for copy, share and QR.
  */
 export default function RoomCreatedCard({
   roomId,
@@ -44,94 +45,116 @@ export default function RoomCreatedCard({
   const [copiedField, setCopiedField] =
     useState(null);
 
+  const [sharing, setSharing] =
+    useState(false);
+
   /*
-   * Generate the frontend join URL.
+   * Always use the URL supplied by the backend.
    *
-   * IMPORTANT:
-   * We do NOT use the backend shareLink when roomId exists.
+   * Do NOT create a URL containing:
+   * ?room=...
+   * ?password=...
    *
-   * The URL contains:
-   *
-   *   room     = Room ID
-   *   password = Room password
-   *
-   * It MUST NOT contain:
-   *
-   *   sessionId
-   *   sessionSecret
-   *   participantId
+   * The backend-generated invite token is the
+   * authentication mechanism for the invitation.
    */
-  const frontendShareLink = useMemo(() => {
-    if (
-      typeof window === 'undefined' ||
-      !roomId
-    ) {
-      return '';
-    }
-
-    const params = new URLSearchParams();
-
-    params.set(
-      'room',
-      roomId.trim().toUpperCase()
-    );
-
-    if (
-      password !== undefined &&
-      password !== null
-    ) {
-      params.set('password', password);
-    }
-
-    return `${window.location.origin}/join?${params.toString()}`;
-  }, [roomId, password]);
+  const frontendShareLink =
+    typeof shareLink === 'string'
+      ? shareLink.trim()
+      : '';
 
   /*
    * Copy text to clipboard.
    *
-   * Uses the modern Clipboard API first.
-   *
-   * Falls back to a temporary textarea if
-   * clipboard access is unavailable.
+   * Works with:
+   * 1. navigator.clipboard
+   * 2. document.execCommand fallback
+   */
+  const copyToClipboard = async (value) => {
+    if (!value) {
+      throw new Error('Nothing to copy');
+    }
+
+    /*
+     * Modern Clipboard API.
+     */
+    if (
+      navigator.clipboard &&
+      typeof navigator.clipboard.writeText === 'function'
+    ) {
+      try {
+        await navigator.clipboard.writeText(value);
+        return true;
+      } catch (error) {
+        console.warn(
+          'Clipboard API failed, trying fallback:',
+          error
+        );
+      }
+    }
+
+    /*
+     * Fallback for localhost / older browsers.
+     */
+    const textarea =
+      document.createElement('textarea');
+
+    textarea.value = value;
+
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    textarea.style.opacity = '0';
+
+    document.body.appendChild(textarea);
+
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(
+      0,
+      textarea.value.length
+    );
+
+    let successful = false;
+
+    try {
+      successful =
+        document.execCommand('copy');
+    } catch (error) {
+      console.error(
+        'Fallback clipboard copy failed:',
+        error
+      );
+    }
+
+    document.body.removeChild(textarea);
+
+    if (!successful) {
+      throw new Error(
+        'Browser could not copy the link'
+      );
+    }
+
+    return true;
+  };
+
+  /*
+   * Copy button handler.
    */
   const handleCopy = async (
     field,
     value
   ) => {
-    if (!value) return;
+    if (!value) {
+      console.error(
+        `Cannot copy ${field}: value is empty`
+      );
+      return;
+    }
 
     try {
-      if (
-        navigator.clipboard &&
-        window.isSecureContext
-      ) {
-        await navigator.clipboard.writeText(value);
-      } else {
-        const textarea =
-          document.createElement('textarea');
-
-        textarea.value = value;
-
-        textarea.style.position = 'fixed';
-        textarea.style.left = '-9999px';
-        textarea.style.top = '0';
-
-        document.body.appendChild(textarea);
-
-        textarea.focus();
-        textarea.select();
-
-        const successful =
-          document.execCommand('copy');
-
-        document.body.removeChild(textarea);
-
-        if (!successful) {
-          throw new Error(
-            'Clipboard copy failed'
-          );
-        }
-      }
+      await copyToClipboard(value);
 
       setCopiedField(field);
 
@@ -144,9 +167,73 @@ export default function RoomCreatedCard({
       }, 1800);
     } catch (error) {
       console.error(
-        'Copy failed:',
+        `Copy ${field} failed:`,
         error
       );
+    }
+  };
+
+  /*
+   * Native device/browser share.
+   *
+   * If Web Share API isn't available,
+   * fall back to copying the link.
+   */
+  const handleShare = async () => {
+    if (!frontendShareLink) {
+      console.error(
+        'Share failed: shareLink is empty'
+      );
+      return;
+    }
+
+    try {
+      setSharing(true);
+
+      /*
+       * Native Share API.
+       */
+      if (
+        typeof navigator.share === 'function'
+      ) {
+        await navigator.share({
+          title: 'Join my GhostChat room',
+          text: 'Use this link to join my temporary GhostChat room.',
+          url: frontendShareLink,
+        });
+
+        return;
+      }
+
+      /*
+       * Fallback to copy.
+       */
+      await copyToClipboard(frontendShareLink);
+
+      setCopiedField('share');
+
+      setTimeout(() => {
+        setCopiedField((current) =>
+          current === 'share'
+            ? null
+            : current
+        );
+      }, 1800);
+    } catch (error) {
+      /*
+       * User cancelling native share is not
+       * considered an application error.
+       */
+      if (
+        error?.name !== 'AbortError'
+      ) {
+        console.error(
+          'Share failed:',
+          error
+        );
+      }
+    } finally {
+      setSharing(false);
     }
   };
 
@@ -154,14 +241,14 @@ export default function RoomCreatedCard({
     {
       key: 'roomId',
       label: 'Room ID',
-      value: roomId,
+      value: roomId || '',
       mono: true,
     },
     {
       key: 'password',
       label: 'Password',
       value: revealPassword
-        ? password
+        ? password || ''
         : '•'.repeat(password?.length || 8),
       mono: true,
     },
@@ -262,7 +349,7 @@ export default function RoomCreatedCard({
                     : row.value
                 }
               >
-                {row.value}
+                {row.value || 'Unavailable'}
               </p>
             </div>
 
@@ -314,6 +401,7 @@ export default function RoomCreatedCard({
 
               <button
                 type="button"
+                disabled={!row.value}
                 onClick={() =>
                   handleCopy(
                     row.key,
@@ -336,6 +424,8 @@ export default function RoomCreatedCard({
                   focus:outline-none
                   focus-visible:ring-2
                   focus-visible:ring-[#00D9FF]
+                  disabled:cursor-not-allowed
+                  disabled:opacity-40
                   touch-manipulation
                 "
                 title={`Copy ${row.label.toLowerCase()}`}
@@ -361,6 +451,7 @@ export default function RoomCreatedCard({
         ))}
       </div>
 
+      {/* ACTION BUTTONS */}
       <div
         className="
           mt-5
@@ -371,11 +462,13 @@ export default function RoomCreatedCard({
           sm:mt-6
         "
       >
-        {/* QR CODE */}
+        {/* SHARE */}
         <button
           type="button"
-          onClick={() =>
-            onShowQr?.(frontendShareLink)
+          onClick={handleShare}
+          disabled={
+            !frontendShareLink ||
+            sharing
           }
           className="
             flex
@@ -396,6 +489,66 @@ export default function RoomCreatedCard({
             focus:outline-none
             focus-visible:ring-2
             focus-visible:ring-[#00D9FF]
+            disabled:cursor-not-allowed
+            disabled:opacity-50
+            touch-manipulation
+          "
+        >
+          {copiedField === 'share' ? (
+            <Check
+              className="
+                h-4 w-4
+                text-[#22C55E]
+              "
+              aria-hidden="true"
+            />
+          ) : (
+            <Share2
+              className="
+                h-4 w-4
+                shrink-0
+              "
+              aria-hidden="true"
+            />
+          )}
+
+          <span>
+            {sharing
+              ? 'Sharing...'
+              : copiedField === 'share'
+                ? 'Link copied'
+                : 'Share link'}
+          </span>
+        </button>
+
+        {/* QR CODE */}
+        <button
+          type="button"
+          onClick={() =>
+            onShowQr?.(frontendShareLink)
+          }
+          disabled={!frontendShareLink}
+          className="
+            flex
+            min-h-11
+            w-full
+            items-center
+            justify-center
+            gap-2
+            rounded-lg
+            border border-white/10
+            px-4
+            py-2.5
+            text-sm
+            text-[#F8FAFC]
+            transition-colors
+            hover:border-white/25
+            hover:bg-white/5
+            focus:outline-none
+            focus-visible:ring-2
+            focus-visible:ring-[#00D9FF]
+            disabled:cursor-not-allowed
+            disabled:opacity-50
             touch-manipulation
           "
         >
@@ -411,53 +564,54 @@ export default function RoomCreatedCard({
             Show QR code
           </span>
         </button>
-
-        {/* ENTER ROOM */}
-        <button
-          type="button"
-          onClick={() =>
-            navigate(`/room/${roomId}`, {
-              state: {
-                password,
-
-                // PRIVATE authentication credentials.
-                sessionId,
-                sessionSecret,
-
-                // PUBLIC participant identity.
-                participantId,
-
-                anonymousName,
-                isOwner: Boolean(isOwner),
-              },
-            })
-          }
-          className="
-            flex
-            min-h-11
-            w-full
-            items-center
-            justify-center
-            rounded-lg
-            bg-[#00D9FF]
-            px-4
-            py-2.5
-            text-sm
-            font-medium
-            text-[#0B0F14]
-            transition-colors
-            hover:bg-[#5CE7FF]
-            focus:outline-none
-            focus-visible:ring-2
-            focus-visible:ring-[#00D9FF]
-            focus-visible:ring-offset-2
-            focus-visible:ring-offset-[#111827]
-            touch-manipulation
-          "
-        >
-          Enter room
-        </button>
       </div>
+
+      {/* ENTER ROOM */}
+      <button
+        type="button"
+        onClick={() =>
+          navigate(`/room/${roomId}`, {
+            state: {
+              password,
+
+              // PRIVATE authentication credentials.
+              sessionId,
+              sessionSecret,
+
+              // PUBLIC participant identity.
+              participantId,
+
+              anonymousName,
+              isOwner: Boolean(isOwner),
+            },
+          })
+        }
+        className="
+          mt-2.5
+          flex
+          min-h-11
+          w-full
+          items-center
+          justify-center
+          rounded-lg
+          bg-[#00D9FF]
+          px-4
+          py-2.5
+          text-sm
+          font-medium
+          text-[#0B0F14]
+          transition-colors
+          hover:bg-[#5CE7FF]
+          focus:outline-none
+          focus-visible:ring-2
+          focus-visible:ring-[#00D9FF]
+          focus-visible:ring-offset-2
+          focus-visible:ring-offset-[#111827]
+          touch-manipulation
+        "
+      >
+        Enter room
+      </button>
     </div>
   );
 }

@@ -24,6 +24,11 @@ import {
   useRoom,
 } from '../context/RoomContext';
 
+import {
+  setSessionCredentials,
+  clearSessionCredentials,
+} from '../services/api';
+
 import { useRoomTimer } from '../hooks/useRoomTimer';
 import { useScreenshotDetection } from '../hooks/useScreenshotDetection';
 
@@ -48,90 +53,86 @@ export default function ChatRoomPage() {
   const navigate = useNavigate();
 
   // --------------------------------------------------
-  // Restore room session
+  // Get room session
   //
-  // A valid room session requires:
+  // Session credentials are intentionally kept only
+  // in React/router memory and the api.js module memory.
   //
-  //   password
-  //   sessionId
-  //   sessionSecret
+  // IMPORTANT:
   //
-  // sessionId + sessionSecret are private credentials.
-  // participantId is the public participant identifier.
+  // sessionId       -> private
+  // sessionSecret   -> private
+  // password        -> private
+  // participantId   -> public participant identifier
   //
-  // The session can now be restored after a normal
-  // browser reload using sessionStorage.
+  // We DO NOT store any of these credentials in:
+  //
+  //   localStorage
+  //   sessionStorage
+  //   URL parameters
+  //   cross-origin cookies
+  //
+  // A browser refresh clears React/router memory.
+  // The user will therefore need to join the room again.
   // --------------------------------------------------
 
   const [session] = useState(() => {
-    // Normal navigation from Join Room / Create Room.
+    /*
+     * Normal navigation from Join Room / Create Room.
+     *
+     * All required private credentials must be supplied
+     * through router state.
+     */
     if (
       location.state?.password &&
       location.state?.sessionId &&
       location.state?.sessionSecret
     ) {
-      return location.state;
+      return {
+        ...location.state,
+        roomId:
+          location.state.roomId ||
+          roomId,
+      };
     }
 
-    // Restore the session after navigation or
-    // a normal browser reload.
-    try {
-      const savedSession = sessionStorage.getItem(
-        `ghostchat-session-${roomId}`
-      );
-
-      if (!savedSession) {
-        return null;
-      }
-
-      const parsedSession =
-        JSON.parse(savedSession);
-
-      /*
-       * Do not restore an incomplete session.
-       *
-       * A valid session must contain:
-       *   password
-       *   sessionId
-       *   sessionSecret
-       */
-      if (
-        !parsedSession?.password ||
-        !parsedSession?.sessionId ||
-        !parsedSession?.sessionSecret
-      ) {
-        return null;
-      }
-
-      return parsedSession;
-    } catch (error) {
-      console.error(
-        'Failed to restore session:',
-        error
-      );
-
-      return null;
-    }
+    /*
+     * No session is restored from browser storage.
+     *
+     * This is intentional for security.
+     */
+    return null;
   });
 
   // --------------------------------------------------
-  // Save session for future navigation/reload
+  // Register HTTP authentication credentials
+  //
+  // api.js keeps these credentials only in JavaScript
+  // memory and sends them through private HTTP headers:
+  //
+  //   X-Session-Id
+  //   X-Session-Secret
+  //
+  // No cookie is required.
   // --------------------------------------------------
 
   useEffect(() => {
     if (
-      location.state?.password &&
-      location.state?.sessionId &&
-      location.state?.sessionSecret
+      session?.sessionId &&
+      session?.sessionSecret
     ) {
-      sessionStorage.setItem(
-        `ghostchat-session-${roomId}`,
-        JSON.stringify(location.state)
+      setSessionCredentials(
+        session.sessionId,
+        session.sessionSecret
       );
     }
+
+    return () => {
+      clearSessionCredentials();
+    };
   }, [
-    location.state,
-    roomId,
+    session?.sessionId,
+    session?.sessionSecret,
   ]);
 
   // --------------------------------------------------
@@ -175,9 +176,7 @@ export default function ChatRoomPage() {
       password={session.password}
       isOwner={Boolean(session.isOwner)}
       onRoomClosed={() => {
-        sessionStorage.removeItem(
-          `ghostchat-session-${roomId}`
-        );
+        clearSessionCredentials();
 
         navigate('/room-expired', {
           replace: true,
@@ -258,16 +257,6 @@ function ChatRoomLayout({
     useState(false);
 
   // --------------------------------------------------
-  // Clear saved session
-  // --------------------------------------------------
-
-  const clearSavedSession = useCallback(() => {
-    sessionStorage.removeItem(
-      `ghostchat-session-${roomId}`
-    );
-  }, [roomId]);
-
-  // --------------------------------------------------
   // Leave room
   // --------------------------------------------------
 
@@ -280,14 +269,17 @@ function ChatRoomLayout({
       leaveRoom();
     }
 
-    clearSavedSession();
+    /*
+     * Remove the private HTTP credentials from memory
+     * before leaving the room.
+     */
+    clearSessionCredentials();
 
     navigate('/', {
       replace: true,
     });
   }, [
     leaveRoom,
-    clearSavedSession,
     navigate,
   ]);
 
@@ -296,8 +288,8 @@ function ChatRoomLayout({
   //
   // Host action:
   //   1. Destroy the room on the backend.
-  //   2. Clear the host's saved session.
-  //   3. Redirect the host to the home page.
+  //   2. Clear private credentials.
+  //   3. Return to the home page.
   // --------------------------------------------------
 
   const handleDestroyRoom = useCallback(async () => {
@@ -310,12 +302,12 @@ function ChatRoomLayout({
         await destroyRoom();
       }
 
-      // The room has been destroyed by the host.
-      // Remove the local session so it cannot be
-      // restored if the browser is refreshed.
-      clearSavedSession();
+      /*
+       * Remove the private HTTP credentials from memory
+       * after the backend confirms room destruction.
+       */
+      clearSessionCredentials();
 
-      // Host should return directly to the home page.
       navigate('/', {
         replace: true,
       });
@@ -331,7 +323,6 @@ function ChatRoomLayout({
     }
   }, [
     destroyRoom,
-    clearSavedSession,
     navigate,
   ]);
 
@@ -348,14 +339,16 @@ function ChatRoomLayout({
       leaveRoom();
     }
 
-    clearSavedSession();
+    /*
+     * Remove the private HTTP credentials from memory.
+     */
+    clearSessionCredentials();
 
     navigate('/room-expired', {
       replace: true,
     });
   }, [
     leaveRoom,
-    clearSavedSession,
     navigate,
   ]);
 

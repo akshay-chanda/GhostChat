@@ -8,30 +8,21 @@ import QRModal from '../components/room/QRModal';
 /**
  * CreateRoomPage
  *
- * Handles both:
+ * Handles:
  *   /create
  *   /room-created
  *
- * CreateRoomForm navigates here with the newly created
- * room details in router state after successful creation.
+ * The backend returns a secure temporary invitation link:
  *
- * PRIVATE SESSION DATA:
+ *   https://ghost-chat-akshay.vercel.app/join?invite=TEMPORARY_TOKEN
+ *
+ * The invite token does NOT expose the room password.
+ *
+ * Private session credentials:
  *   sessionId
  *   sessionSecret
  *
- * These values are passed only to RoomCreatedCard so the owner
- * can establish their authenticated room session.
- *
- * They are NEVER included in the QR invitation.
- *
- * The QR invitation is generated entirely on the frontend using:
- *
- *   window.location.origin
- *   roomId
- *   password
- *
- * The backend Render shareLink is NOT used for QR
- * codes or QR "Copy link".
+ * are kept only for the owner's authenticated room session.
  */
 export default function CreateRoomPage() {
   const location = useLocation();
@@ -45,7 +36,7 @@ export default function CreateRoomPage() {
   // --------------------------------------------------
 
   const handleShowQr = () => {
-    if (!createdRoom?.roomId) {
+    if (!createdRoom?.shareLink) {
       return;
     }
 
@@ -101,6 +92,7 @@ export default function CreateRoomPage() {
               <RoomCreatedCard
                 roomId={createdRoom.roomId}
                 password={createdRoom.password}
+                shareLink={createdRoom.shareLink}
                 sessionId={createdRoom.sessionId}
                 sessionSecret={createdRoom.sessionSecret}
                 participantId={createdRoom.participantId}
@@ -115,8 +107,8 @@ export default function CreateRoomPage() {
             <QRModal
               open={qrOpen}
               onClose={handleCloseQr}
+              shareLink={createdRoom.shareLink}
               roomId={createdRoom.roomId}
-              password={createdRoom.password}
             />
           </>
         ) : (

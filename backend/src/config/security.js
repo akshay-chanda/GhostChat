@@ -25,11 +25,9 @@ const helmetOptions = {
   /**
    * Vercel frontend and Render backend are different origins.
    *
-   * "same-site" can interfere with resources requested across
-   * the deployment boundary. "cross-origin" allows the backend
-   * to serve resources to the separately hosted frontend.
-   *
-   * CORS is still controlled separately by corsOptions below.
+   * Allow resources to be requested across the deployment
+   * boundary. Authentication is handled through explicit
+   * session headers, not cookies.
    */
   crossOriginResourcePolicy: {
     policy: 'cross-origin',
@@ -43,22 +41,35 @@ const helmetOptions = {
 const corsOptions = {
   origin: env.CORS_ORIGIN,
 
-  credentials: true,
+  /*
+   * Cookie authentication has been removed.
+   *
+   * The frontend authenticates using:
+   *
+   *   X-Session-Id
+   *   X-Session-Secret
+   *
+   * Therefore cross-origin credentials are not required.
+   */
+  credentials: false,
 
   methods: [
     'GET',
     'POST',
     'DELETE',
   ],
+
+  allowedHeaders: [
+    'Content-Type',
+    'X-Session-Id',
+    'X-Session-Secret',
+  ],
 };
 
-// Deliberately above the library's defaults — Argon2id's cost
-// parameters are the actual defense against offline brute-forcing a
-// stolen password hash, so this isn't a place to accept "good enough."
-
+// Argon2id password hashing configuration.
 const argon2Options = {
-  type: 2, // argon2id
-  memoryCost: 19456, // ~19MB, OWASP-recommended minimum for argon2id
+  type: 2,
+  memoryCost: 19456,
   timeCost: 2,
   parallelism: 1,
 };

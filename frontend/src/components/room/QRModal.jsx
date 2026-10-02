@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import QRCode from 'qrcode';
 import { X, Copy, Check } from 'lucide-react';
@@ -6,48 +6,31 @@ import { X, Copy, Check } from 'lucide-react';
 export default function QRModal({
   open,
   onClose,
-  roomId,
-  password,
+  shareLink,
 }) {
   const canvasRef = useRef(null);
   const [copied, setCopied] = useState(false);
 
   /*
-   * The invitation URL is generated from the frontend.
+   * IMPORTANT:
+   *
+   * The QR code uses the exact same shareLink generated
+   * by the backend and displayed in RoomCreatedCard.
    *
    * Example:
-   * https://ghost-chat-akshay.vercel.app/join?room=ABC123&password=hello123
+   *
+   * Local:
+   * http://localhost:5173/join?invite=TEMPORARY_TOKEN
+   *
+   * Production:
+   * https://ghost-chat-akshay.vercel.app/join?invite=TEMPORARY_TOKEN
+   *
+   * The password is NEVER placed in the URL.
    */
-  const frontendShareLink = useMemo(() => {
-    if (
-      typeof window === 'undefined' ||
-      !roomId
-    ) {
-      return '';
-    }
-
-    const params = new URLSearchParams();
-
-    params.set(
-      'room',
-      roomId.trim().toUpperCase()
-    );
-
-    if (
-      password !== undefined &&
-      password !== null
-    ) {
-      params.set(
-        'password',
-        password
-      );
-    }
-
-    return (
-      `${window.location.origin}` +
-      `/join?${params.toString()}`
-    );
-  }, [roomId, password]);
+  const frontendShareLink =
+    typeof shareLink === 'string'
+      ? shareLink.trim()
+      : '';
 
   /*
    * Generate QR code.
@@ -133,7 +116,7 @@ export default function QRModal({
   }, [open]);
 
   /*
-   * Copy the same URL used by the QR code.
+   * Copy the EXACT same URL used by the QR code.
    */
   const handleCopy = async () => {
     if (!frontendShareLink) {
@@ -347,7 +330,8 @@ export default function QRModal({
           "
         >
           Scan this QR code to automatically
-          fill the Room ID and password.
+          open the Join Room page and fill
+          the room details.
         </p>
 
         {/* Copy Link */}

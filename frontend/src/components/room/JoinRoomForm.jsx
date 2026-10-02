@@ -5,10 +5,15 @@ import {
 } from 'react-router-dom';
 import { joinRoom } from '../../services/roomService';
 
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  '/api';
+
 export default function JoinRoomForm({
   initialRoomId = '',
 }) {
   const navigate = useNavigate();
+
   const [searchParams] =
     useSearchParams();
 
@@ -21,42 +26,128 @@ export default function JoinRoomForm({
   const [submitting, setSubmitting] =
     useState(false);
 
+  const [loadingInvite, setLoadingInvite] =
+    useState(false);
+
   const [error, setError] =
     useState(null);
 
   /*
-   * Automatically fill Room ID and Password
-   * from:
+   * Resolve a temporary invite token.
    *
-   * - Share Link
-   * - Copy Link
-   * - QR code
+   * New secure share links look like:
    *
-   * Example:
-   * /join?room=ABC123&password=hello123
+   *   /join?invite=TEMPORARY_TOKEN
    *
-   * IMPORTANT:
-   * The URL contains only the room ID and room password.
-   * It never contains sessionId or sessionSecret.
+   * The password is NOT stored in the URL.
+   *
+   * The backend resolves the temporary token and
+   * returns the Room ID and password over HTTPS.
    */
   useEffect(() => {
-    const roomFromUrl =
-      searchParams.get('room');
+    const inviteToken =
+      searchParams.get('invite');
 
-    const passwordFromUrl =
-      searchParams.get('password');
+    /*
+     * Backward compatibility:
+     *
+     * If there is no invite token, we still allow
+     * normal manual Room ID/password entry.
+     *
+     * We intentionally do NOT support reading a
+     * password from the URL anymore.
+     */
+    if (!inviteToken) {
+      const roomFromUrl =
+        searchParams.get('room');
 
-    if (roomFromUrl) {
-      setRoomId(
-        roomFromUrl
-          .trim()
-          .toUpperCase()
-      );
+      if (roomFromUrl) {
+        setRoomId(
+          roomFromUrl
+            .trim()
+            .toUpperCase()
+        );
+      }
+
+      return;
     }
 
-    if (passwordFromUrl !== null) {
-      setPassword(passwordFromUrl);
-    }
+    let cancelled = false;
+
+    const resolveInvite = async () => {
+      setLoadingInvite(true);
+      setError(null);
+
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/rooms/invite/${encodeURIComponent(
+            inviteToken
+          )}`,
+          {
+            method: 'GET',
+            credentials: 'include',
+            headers: {
+              Accept: 'application/json',
+            },
+          }
+        );
+
+        let data = null;
+
+        try {
+          data = await response.json();
+        } catch {
+          data = null;
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            data?.message ||
+              'This invite link is invalid or has expired.'
+          );
+        }
+
+        if (
+          !data?.roomId ||
+          typeof data.password !== 'string'
+        ) {
+          throw new Error(
+            'The invite link returned invalid room information.'
+          );
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        setRoomId(
+          data.roomId
+            .trim()
+            .toUpperCase()
+        );
+
+        setPassword(data.password);
+      } catch (err) {
+        if (cancelled) {
+          return;
+        }
+
+        setError(
+          err?.message ||
+            'This invite link is invalid or has expired.'
+        );
+      } finally {
+        if (!cancelled) {
+          setLoadingInvite(false);
+        }
+      }
+    };
+
+    resolveInvite();
+
+    return () => {
+      cancelled = true;
+    };
   }, [searchParams]);
 
   const handleSubmit = async (e) => {
@@ -126,6 +217,10 @@ export default function JoinRoomForm({
         setError(
           'This room is full.'
         );
+      } else if (status === 403) {
+        setError(
+          'This room is currently locked.'
+        );
       } else {
         setError(
           'Room ID or password is incorrect.'
@@ -135,6 +230,13 @@ export default function JoinRoomForm({
       setSubmitting(false);
     }
   };
+
+  const inviteLoading =
+    loadingInvite;
+
+  const disableForm =
+    submitting ||
+    loadingInvite;
 
   return (
     <form
@@ -172,6 +274,28 @@ export default function JoinRoomForm({
         </p>
       </div>
 
+      {/* Invite loading */}
+
+      {inviteLoading && (
+        <div
+          className="
+            mt-5
+            rounded-lg
+            border
+            border-[#00D9FF]/20
+            bg-[#00D9FF]/5
+            px-3
+            py-2.5
+            text-left
+            text-sm
+            leading-5
+            text-[#00D9FF]
+          "
+        >
+          Loading secure invite…
+        </div>
+      )}
+
       {/* Form fields */}
 
       <div
@@ -207,6 +331,7 @@ export default function JoinRoomForm({
               )
             }
             required
+            disabled={disableForm}
             autoComplete="off"
             placeholder="7F3K9A2M"
             className="
@@ -225,6 +350,8 @@ export default function JoinRoomForm({
               focus:outline-none
               focus-visible:ring-2
               focus-visible:ring-[#00D9FF]
+              disabled:cursor-not-allowed
+              disabled:opacity-60
               sm:text-sm
             "
           />
@@ -254,6 +381,7 @@ export default function JoinRoomForm({
               setPassword(e.target.value)
             }
             required
+            disabled={disableForm}
             autoComplete="current-password"
             placeholder="••••••••"
             className="
@@ -272,6 +400,8 @@ export default function JoinRoomForm({
               focus:outline-none
               focus-visible:ring-2
               focus-visible:ring-[#00D9FF]
+              disabled:cursor-not-allowed
+              disabled:opacity-60
               sm:text-sm
             "
           />
@@ -303,7 +433,7 @@ export default function JoinRoomForm({
 
         <button
           type="submit"
-          disabled={submitting}
+          disabled={disableForm}
           className="
             flex
             min-h-11
@@ -329,9 +459,11 @@ export default function JoinRoomForm({
             touch-manipulation
           "
         >
-          {submitting
-            ? 'Joining…'
-            : 'Join secure room'}
+          {loadingInvite
+            ? 'Loading invite…'
+            : submitting
+              ? 'Joining…'
+              : 'Join secure room'}
         </button>
       </div>
     </form>

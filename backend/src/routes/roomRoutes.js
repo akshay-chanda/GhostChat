@@ -16,6 +16,8 @@ router.post('/', roomCreationLimiter, validateBody(createRoomSchema), roomContro
 
 router.post('/join', joinAttemptLimiter, validateBody(joinRoomSchema), roomController.joinRoom);
 
+router.get('/invite/:token', roomController.resolveInvite);
+
 router.get('/:roomId', roomController.getRoomInfo);
 
 // Owner-only lifecycle actions. These duplicate what's available
