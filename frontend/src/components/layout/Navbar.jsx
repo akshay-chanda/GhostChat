@@ -56,7 +56,7 @@ export default function Navbar() {
         <Link
           to="/"
           className="
-            flex min-w-0 shrink-0 items-center gap-2
+            flex min-w-0 shrink-0 items-center gap-3
             rounded-md
             focus:outline-none focus-visible:ring-2
             focus-visible:ring-[#00D9FF]
@@ -64,12 +64,21 @@ export default function Navbar() {
           aria-label="GhostChat home"
         >
           <ShieldCheck
-            className="h-5 w-5 shrink-0 text-[#00D9FF]"
+            className="
+              h-7 w-7 shrink-0 text-[#00D9FF]
+              max-md:h-7 max-md:w-7
+            "
             strokeWidth={2}
             aria-hidden="true"
           />
 
-          <span className="truncate text-[15px] font-semibold tracking-tight text-[#F8FAFC]">
+          <span
+            className="
+              truncate
+              text-xl font-semibold tracking-tight
+              text-[#F8FAFC]
+            "
+          >
             GhostChat
           </span>
         </Link>
@@ -138,7 +147,7 @@ export default function Navbar() {
               type="button"
               onClick={() => setMobileOpen((value) => !value)}
               className="
-                flex min-h-10 min-w-10 shrink-0 items-center justify-center
+                flex min-h-11 min-w-11 shrink-0 items-center justify-center
                 rounded-lg
                 text-[#F8FAFC]
                 transition-colors
@@ -154,9 +163,9 @@ export default function Navbar() {
               aria-controls="mobile-navigation"
             >
               {mobileOpen ? (
-                <X className="h-5 w-5" aria-hidden="true" />
+                <X className="h-6 w-6" aria-hidden="true" />
               ) : (
-                <Menu className="h-5 w-5" aria-hidden="true" />
+                <Menu className="h-6 w-6" aria-hidden="true" />
               )}
             </button>
           </>
