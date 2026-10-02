@@ -10,6 +10,15 @@ const fileRoutes = require('./routes/fileRoutes');
 
 const app = express();
 
+/*
+ * Render places the application behind a reverse proxy/load balancer.
+ *
+ * Trust the first proxy so Express can correctly determine the
+ * original client IP from X-Forwarded-For. This is important for
+ * IP-based rate limiting.
+ */
+app.set('trust proxy', 1);
+
 applySecurity(app); // helmet + CORS
 
 app.use(
