@@ -24,7 +24,7 @@ export default function Footer() {
       heading: 'Trust',
       links: [
         { label: 'Privacy policy', to: '/privacy' },
-        { label: 'Security model', to: '/#security' },
+        { label: 'Security model', to: '/security' },
         { label: 'Limitations', to: '/privacy#limitations' },
       ],
     },

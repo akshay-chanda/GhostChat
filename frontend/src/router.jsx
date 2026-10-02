@@ -5,6 +5,7 @@ import CreateRoomPage from './pages/CreateRoomPage';
 import JoinRoomPage from './pages/JoinRoomPage';
 import ChatRoomPage from './pages/ChatRoomPage';
 import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
+import SecurityPage from './pages/SecurityPage';
 import RoomExpiredPage from './pages/RoomExpiredPage';
 import NotFoundPage from './pages/NotFoundPage';
 
@@ -15,14 +16,19 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <LandingPage /> },
       { path: 'create', element: <CreateRoomPage /> },
+
       // CreateRoomForm navigates here (with router state) right
       // after a successful creation — same page component as
       // /create, which branches on whether that state is present.
       { path: 'room-created', element: <CreateRoomPage /> },
+
       { path: 'join', element: <JoinRoomPage /> },
       { path: 'join/:roomId', element: <JoinRoomPage /> },
       { path: 'room/:roomId', element: <ChatRoomPage /> },
+
       { path: 'privacy', element: <PrivacyPolicyPage /> },
+      { path: 'security', element: <SecurityPage /> },
+
       { path: 'room-expired', element: <RoomExpiredPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],
