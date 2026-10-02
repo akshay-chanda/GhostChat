@@ -5,17 +5,16 @@ import {
 } from 'react-router-dom';
 import { joinRoom } from '../../services/roomService';
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ||
-  '/api';
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || '/api'
+).replace(/\/+$/, '');
 
 export default function JoinRoomForm({
   initialRoomId = '',
 }) {
   const navigate = useNavigate();
 
-  const [searchParams] =
-    useSearchParams();
+  const [searchParams] = useSearchParams();
 
   const [roomId, setRoomId] =
     useState(initialRoomId);
@@ -35,27 +34,27 @@ export default function JoinRoomForm({
   /*
    * Resolve a temporary invite token.
    *
-   * New secure share links look like:
+   * Secure share links look like:
    *
    *   /join?invite=TEMPORARY_TOKEN
    *
    * The password is NOT stored in the URL.
    *
-   * The backend resolves the temporary token and
-   * returns the Room ID and password over HTTPS.
+   * The backend resolves the temporary token
+   * and returns the Room ID and password.
    */
   useEffect(() => {
     const inviteToken =
       searchParams.get('invite');
 
     /*
-     * Backward compatibility:
+     * No invite token:
      *
-     * If there is no invite token, we still allow
-     * normal manual Room ID/password entry.
+     * Allow normal manual Room ID/password entry.
      *
-     * We intentionally do NOT support reading a
-     * password from the URL anymore.
+     * Backward compatibility is retained for:
+     *
+     *   /join?room=ROOM_ID
      */
     if (!inviteToken) {
       const roomFromUrl =
@@ -79,13 +78,22 @@ export default function JoinRoomForm({
       setError(null);
 
       try {
-        const response = await fetch(
+        const inviteUrl =
           `${API_BASE_URL}/rooms/invite/${encodeURIComponent(
             inviteToken
-          )}`,
+          )}`;
+
+        const response = await fetch(
+          inviteUrl,
           {
             method: 'GET',
-            credentials: 'include',
+
+            /*
+             * Invite resolution is a public
+             * endpoint.
+             *
+             * No cookies or credentials are used.
+             */
             headers: {
               Accept: 'application/json',
             },
@@ -107,9 +115,19 @@ export default function JoinRoomForm({
           );
         }
 
+        /*
+         * The backend must return:
+         *
+         * {
+         *   roomId,
+         *   password,
+         *   expiresAt
+         * }
+         */
         if (
           !data?.roomId ||
-          typeof data.password !== 'string'
+          typeof data.password !== 'string' ||
+          !data.password
         ) {
           throw new Error(
             'The invite link returned invalid room information.'
@@ -121,7 +139,7 @@ export default function JoinRoomForm({
         }
 
         setRoomId(
-          data.roomId
+          String(data.roomId)
             .trim()
             .toUpperCase()
         );
@@ -132,10 +150,29 @@ export default function JoinRoomForm({
           return;
         }
 
-        setError(
-          err?.message ||
-            'This invite link is invalid or has expired.'
+        console.error(
+          'Invite loading failed:',
+          err
         );
+
+        /*
+         * A browser "Failed to fetch" normally means
+         * that the browser could not establish a
+         * successful HTTP connection to the backend.
+         */
+        if (
+          err instanceof TypeError ||
+          err?.message === 'Failed to fetch'
+        ) {
+          setError(
+            'Unable to connect to the server. Please try again.'
+          );
+        } else {
+          setError(
+            err?.message ||
+              'This invite link is invalid or has expired.'
+          );
+        }
       } finally {
         if (!cancelled) {
           setLoadingInvite(false);
@@ -149,6 +186,10 @@ export default function JoinRoomForm({
       cancelled = true;
     };
   }, [searchParams]);
+
+  // --------------------------------------------------
+  // JOIN ROOM
+  // --------------------------------------------------
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -169,17 +210,20 @@ export default function JoinRoomForm({
         });
 
       /*
-       * The backend returns the joining participant's
-       * private authentication credentials:
+       * The backend returns:
        *
+       * PRIVATE:
        *   sessionId
        *   sessionSecret
        *
-       * It also returns the public participantId.
+       * PUBLIC:
+       *   participantId
+       *   anonymousName
        *
-       * These are passed through router state to
-       * ChatRoomPage, which persists the session
-       * privately in sessionStorage.
+       * These are passed through React Router
+       * state to ChatRoomPage.
+       *
+       * No localStorage/sessionStorage is used.
        */
       navigate(
         `/room/${session.roomId}`,
@@ -221,9 +265,17 @@ export default function JoinRoomForm({
         setError(
           'This room is currently locked.'
         );
+      } else if (
+        err instanceof TypeError ||
+        err?.message === 'Failed to fetch'
+      ) {
+        setError(
+          'Unable to connect to the server. Please try again.'
+        );
       } else {
         setError(
-          'Room ID or password is incorrect.'
+          err?.message ||
+            'Room ID or password is incorrect.'
         );
       }
     } finally {
@@ -231,12 +283,13 @@ export default function JoinRoomForm({
     }
   };
 
-  const inviteLoading =
-    loadingInvite;
-
   const disableForm =
     submitting ||
     loadingInvite;
+
+  // --------------------------------------------------
+  // UI
+  // --------------------------------------------------
 
   return (
     <form
@@ -276,7 +329,7 @@ export default function JoinRoomForm({
 
       {/* Invite loading */}
 
-      {inviteLoading && (
+      {loadingInvite && (
         <div
           className="
             mt-5
