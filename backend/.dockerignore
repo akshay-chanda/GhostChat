@@ -1,0 +1,29 @@
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Uploaded/temporary files
+uploads/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Git
+.git/
+.gitignore
+
+# Tests and coverage
+coverage/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

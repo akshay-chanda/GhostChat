@@ -10,6 +10,12 @@ const request = require('supertest');
 const app = require('../../src/app');
 const { resetRateLimiters } = require('../../src/middleware/rateLimiter');
 
+function withSession(requestBuilder, room) {
+  return requestBuilder
+    .set('X-Session-Id', room.sessionId)
+    .set('X-Session-Secret', room.sessionSecret);
+}
+
 describe('rate limiting', () => {
   afterEach(() => {
     resetRateLimiters();
@@ -69,9 +75,9 @@ describe('rate limiting', () => {
         allowFileSharing: true,
       });
 
-    const { roomId } = createRes.body;
-    const cookie = createRes.headers['set-cookie'];
+    expect(createRes.status).toBe(201);
 
+    const room = createRes.body;
     const attempts = [];
 
     for (let i = 0; i < 7; i += 1) {
@@ -79,9 +85,10 @@ describe('rate limiting', () => {
 
       // eslint-disable-next-line no-await-in-loop
       attempts.push(
-        await request(app)
-          .post(`/api/rooms/${roomId}/files`)
-          .set('Cookie', cookie)
+        await withSession(
+          request(app).post(`/api/rooms/${room.roomId}/files`),
+          room
+        )
           .field('iv', 'aXY=')
           .field('originalName', `f${i}.txt`)
           .field('mimeType', 'text/plain')

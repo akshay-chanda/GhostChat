@@ -23,8 +23,13 @@ async function createRoomWithFiles() {
 
   return {
     ...res.body,
-    cookie: res.headers['set-cookie'],
   };
+}
+
+function withSession(requestBuilder, room) {
+  return requestBuilder
+    .set('X-Session-Id', room.sessionId)
+    .set('X-Session-Secret', room.sessionSecret);
 }
 
 describe('path traversal', () => {
@@ -36,9 +41,10 @@ describe('path traversal', () => {
     const room = await createRoomWithFiles();
     const payload = Buffer.from('should-stay-inside-storage-dir');
 
-    const res = await request(app)
-      .post(`/api/rooms/${room.roomId}/files`)
-      .set('Cookie', room.cookie)
+    const res = await withSession(
+      request(app).post(`/api/rooms/${room.roomId}/files`),
+      room
+    )
       .field('iv', 'aXY=')
       .field('originalName', '../../../../etc/cron.d/evil.txt')
       .field('mimeType', 'text/plain')
@@ -63,20 +69,24 @@ describe('path traversal', () => {
   it('a traversal sequence in the fileId route parameter matches no file, rather than reading an arbitrary path', async () => {
     const room = await createRoomWithFiles();
 
-    const res = await request(app)
-      .get('/api/files/..%2F..%2F..%2Fetc%2Fpasswd/download')
-      .set('Cookie', room.cookie);
+    const res = await withSession(
+      request(app).get(
+        '/api/files/..%2F..%2F..%2Fetc%2Fpasswd/download'
+      ),
+      room
+    );
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
   });
 
   it('an absolute path as the original filename is reduced to its basename', async () => {
     const room = await createRoomWithFiles();
     const payload = Buffer.from('abc');
 
-    const res = await request(app)
-      .post(`/api/rooms/${room.roomId}/files`)
-      .set('Cookie', room.cookie)
+    const res = await withSession(
+      request(app).post(`/api/rooms/${room.roomId}/files`),
+      room
+    )
       .field('iv', 'aXY=')
       .field('originalName', '/etc/passwd.txt')
       .field('mimeType', 'text/plain')
@@ -91,9 +101,10 @@ describe('path traversal', () => {
     const room = await createRoomWithFiles();
     const payload = Buffer.from('abc');
 
-    const res = await request(app)
-      .post(`/api/rooms/${room.roomId}/files`)
-      .set('Cookie', room.cookie)
+    const res = await withSession(
+      request(app).post(`/api/rooms/${room.roomId}/files`),
+      room
+    )
       .field('iv', 'aXY=')
       .field('originalName', '..\\..\\windows\\system32\\evil.txt')
       .field('mimeType', 'text/plain')
@@ -110,9 +121,10 @@ describe('path traversal', () => {
 
     const sameNameUploads = await Promise.all(
       Array.from({ length: 3 }, () =>
-        request(app)
-          .post(`/api/rooms/${room.roomId}/files`)
-          .set('Cookie', room.cookie)
+        withSession(
+          request(app).post(`/api/rooms/${room.roomId}/files`),
+          room
+        )
           .field('iv', 'aXY=')
           .field('originalName', 'same-name.txt')
           .field('mimeType', 'text/plain')

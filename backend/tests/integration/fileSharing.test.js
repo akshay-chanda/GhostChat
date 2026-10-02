@@ -22,8 +22,13 @@ async function createRoom(overrides = {}) {
 
   return {
     ...res.body,
-    cookie: res.headers['set-cookie'],
   };
+}
+
+function withSession(requestBuilder, room) {
+  return requestBuilder
+    .set('X-Session-Id', room.sessionId)
+    .set('X-Session-Secret', room.sessionSecret);
 }
 
 describe('file sharing over HTTP', () => {
@@ -35,9 +40,10 @@ describe('file sharing over HTTP', () => {
     const room = await createRoom();
     const plaintext = Buffer.from('secret file contents');
 
-    const res = await request(app)
-      .post(`/api/rooms/${room.roomId}/files`)
-      .set('Cookie', room.cookie)
+    const res = await withSession(
+      request(app).post(`/api/rooms/${room.roomId}/files`),
+      room
+    )
       .field('iv', 'aXY=')
       .field('originalName', 'secret.txt')
       .field('mimeType', 'text/plain')
@@ -59,9 +65,10 @@ describe('file sharing over HTTP', () => {
     const room = await createRoom();
     const ciphertext = Buffer.from('encrypted-ciphertext-bytes');
 
-    const uploadRes = await request(app)
-      .post(`/api/rooms/${room.roomId}/files`)
-      .set('Cookie', room.cookie)
+    const uploadRes = await withSession(
+      request(app).post(`/api/rooms/${room.roomId}/files`),
+      room
+    )
       .field('iv', 'aXY=')
       .field('originalName', 'encrypted.bin')
       .field('mimeType', 'application/octet-stream')
@@ -73,9 +80,10 @@ describe('file sharing over HTTP', () => {
 
     const fileId = uploadRes.body.file.id;
 
-    const downloadRes = await request(app)
-      .get(`/api/files/${fileId}/download`)
-      .set('Cookie', room.cookie);
+    const downloadRes = await withSession(
+      request(app).get(`/api/files/${fileId}/download`),
+      room
+    );
 
     expect(downloadRes.status).toBe(200);
     expect(Buffer.from(downloadRes.body)).toEqual(ciphertext);
@@ -87,16 +95,17 @@ describe('file sharing over HTTP', () => {
 
     const payload = Buffer.from('should-not-upload');
 
-    const res = await request(app)
-      .post(`/api/rooms/${roomA.roomId}/files`)
-      .set('Cookie', roomB.cookie)
+    const res = await withSession(
+      request(app).post(`/api/rooms/${roomA.roomId}/files`),
+      roomB
+    )
       .field('iv', 'aXY=')
       .field('originalName', 'blocked.txt')
       .field('mimeType', 'text/plain')
       .field('size', String(payload.length))
       .attach('file', payload, 'blocked.txt');
 
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
   it('rejects a file over the 20MB limit before writing anything to disk', async () => {
@@ -104,9 +113,10 @@ describe('file sharing over HTTP', () => {
 
     const oversized = Buffer.alloc(20 * 1024 * 1024 + 1);
 
-    const res = await request(app)
-      .post(`/api/rooms/${room.roomId}/files`)
-      .set('Cookie', room.cookie)
+    const res = await withSession(
+      request(app).post(`/api/rooms/${room.roomId}/files`),
+      room
+    )
       .field('iv', 'aXY=')
       .field('originalName', 'too-large.bin')
       .field('mimeType', 'application/octet-stream')
@@ -120,9 +130,10 @@ describe('file sharing over HTTP', () => {
     const room = await createRoom();
     const ciphertext = Buffer.from('temporary-file');
 
-    const uploadRes = await request(app)
-      .post(`/api/rooms/${room.roomId}/files`)
-      .set('Cookie', room.cookie)
+    const uploadRes = await withSession(
+      request(app).post(`/api/rooms/${room.roomId}/files`),
+      room
+    )
       .field('iv', 'aXY=')
       .field('originalName', 'temporary.txt')
       .field('mimeType', 'text/plain')
@@ -134,16 +145,18 @@ describe('file sharing over HTTP', () => {
 
     const fileId = uploadRes.body.file.id;
 
-    const deleteRes = await request(app)
-      .delete(`/api/files/${fileId}`)
-      .set('Cookie', room.cookie);
+    const deleteRes = await withSession(
+      request(app).delete(`/api/files/${fileId}`),
+      room
+    );
 
     expect(deleteRes.status).toBe(200);
 
-    const downloadRes = await request(app)
-      .get(`/api/files/${fileId}/download`)
-      .set('Cookie', room.cookie);
+    const downloadRes = await withSession(
+      request(app).get(`/api/files/${fileId}/download`),
+      room
+    );
 
-    expect(downloadRes.status).toBe(404);
+    expect(downloadRes.status).toBe(401);
   });
 });

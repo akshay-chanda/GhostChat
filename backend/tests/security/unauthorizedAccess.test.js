@@ -20,10 +20,7 @@ async function createRoom(overrides = {}) {
       ...overrides,
     });
 
-  return {
-    ...res.body,
-    cookie: res.headers['set-cookie'],
-  };
+  return res.body;
 }
 
 async function joinRoom(roomId, password = 'a-valid-password-here') {
@@ -34,10 +31,13 @@ async function joinRoom(roomId, password = 'a-valid-password-here') {
       password,
     });
 
-  return {
-    ...res.body,
-    cookie: res.headers['set-cookie'],
-  };
+  return res.body;
+}
+
+function withSession(requestBuilder, session) {
+  return requestBuilder
+    .set('X-Session-Id', session.sessionId)
+    .set('X-Session-Secret', session.sessionSecret);
 }
 
 describe('unauthorized access', () => {
@@ -58,32 +58,35 @@ describe('unauthorized access', () => {
     const room = await createRoom();
     const member = await joinRoom(room.roomId);
 
-    const res = await request(app)
-      .post(`/api/rooms/${room.roomId}/lock`)
-      .set('Cookie', member.cookie);
+    const res = await withSession(
+      request(app).post(`/api/rooms/${room.roomId}/lock`),
+      member
+    );
 
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('unauthorized');
   });
 
-  it('rejects a session cookie presented against a different room', async () => {
+  it('rejects a session presented against a different room', async () => {
     const roomA = await createRoom();
     const roomB = await createRoom();
 
-    const res = await request(app)
-      .post(`/api/rooms/${roomA.roomId}/lock`)
-      .set('Cookie', roomB.cookie);
+    const res = await withSession(
+      request(app).post(`/api/rooms/${roomA.roomId}/lock`),
+      roomB
+    );
 
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
   it('rejects destroying a room you do not own', async () => {
     const room = await createRoom();
     const member = await joinRoom(room.roomId);
 
-    const res = await request(app)
-      .post(`/api/rooms/${room.roomId}/destroy`)
-      .set('Cookie', member.cookie);
+    const res = await withSession(
+      request(app).post(`/api/rooms/${room.roomId}/destroy`),
+      member
+    );
 
     expect(res.status).toBe(403);
 
@@ -97,9 +100,10 @@ describe('unauthorized access', () => {
     const roomA = await createRoom();
     const roomB = await createRoom();
 
-    const uploadRes = await request(app)
-      .post(`/api/rooms/${roomA.roomId}/files`)
-      .set('Cookie', roomA.cookie)
+    const uploadRes = await withSession(
+      request(app).post(`/api/rooms/${roomA.roomId}/files`),
+      roomA
+    )
       .field('iv', 'aXY=')
       .field('originalName', 'secret.txt')
       .field('mimeType', 'text/plain')
@@ -111,11 +115,12 @@ describe('unauthorized access', () => {
 
     const fileId = uploadRes.body.file.id;
 
-    const crossRoomDownload = await request(app)
-      .get(`/api/files/${fileId}/download`)
-      .set('Cookie', roomB.cookie);
+    const crossRoomDownload = await withSession(
+      request(app).get(`/api/files/${fileId}/download`),
+      roomB
+    );
 
-    expect(crossRoomDownload.status).toBe(403);
+    expect(crossRoomDownload.status).toBe(401);
   });
 
   it('only the uploader or the room owner can delete a shared file — a random member cannot', async () => {
@@ -123,9 +128,10 @@ describe('unauthorized access', () => {
     const uploaderMember = await joinRoom(room.roomId);
     const otherMember = await joinRoom(room.roomId);
 
-    const uploadRes = await request(app)
-      .post(`/api/rooms/${room.roomId}/files`)
-      .set('Cookie', uploaderMember.cookie)
+    const uploadRes = await withSession(
+      request(app).post(`/api/rooms/${room.roomId}/files`),
+      uploaderMember
+    )
       .field('iv', 'aXY=')
       .field('originalName', 'shared.txt')
       .field('mimeType', 'text/plain')
@@ -137,34 +143,28 @@ describe('unauthorized access', () => {
 
     const fileId = uploadRes.body.file.id;
 
-    const deleteAttempt = await request(app)
-      .delete(`/api/files/${fileId}`)
-      .set('Cookie', otherMember.cookie);
+    const deleteAttempt = await withSession(
+      request(app).delete(`/api/files/${fileId}`),
+      otherMember
+    );
 
     expect(deleteAttempt.status).toBe(403);
 
-    const ownerDelete = await request(app)
-      .delete(`/api/files/${fileId}`)
-      .set('Cookie', room.cookie);
+    const ownerDelete = await withSession(
+      request(app).delete(`/api/files/${fileId}`),
+      room
+    );
 
     expect(ownerDelete.status).toBe(200);
   });
 
-  it('an expired/unknown session cookie is rejected rather than silently treated as anonymous', async () => {
+  it('an unknown session is rejected rather than silently treated as anonymous', async () => {
     const room = await createRoom();
-
-    const forgedCookie = [
-      `gc_session=${encodeURIComponent(
-        JSON.stringify({
-          sessionId: 'nope',
-          roomId: room.roomId,
-        })
-      )}`,
-    ];
 
     const res = await request(app)
       .post(`/api/rooms/${room.roomId}/lock`)
-      .set('Cookie', forgedCookie);
+      .set('X-Session-Id', 'nope')
+      .set('X-Session-Secret', 'invalid-session-secret');
 
     expect(res.status).toBe(401);
   });
