@@ -1,109 +1,140 @@
 const fileStorageService = require('../services/fileStorageService');
-const roomManager = require('../services/roomManager');
+const store = require('../storage/memoryStore');
 const { createFileMessage } = require('../models/Message');
 const logger = require('../utils/logger');
 
 /**
  * Upload an already-encrypted file.
  *
- * IMPORTANT:
- * The browser encrypts the file before it reaches this controller.
- * The backend only temporarily stores the ciphertext.
+ * The frontend encrypts the file before sending it.
+ * The backend stores only the encrypted bytes.
  */
-async function uploadFile(req, res, next) {
+async function uploadFile(req, res) {
   try {
     const { roomId } = req.params;
+
+    if (!req.session) {
+      return res.status(401).json({
+        error: 'Authentication required.',
+      });
+    }
+
     const {
-      iv,
       originalName,
       mimeType,
       size,
+      iv,
     } = req.body;
 
-    if (!req.file) {
+    const encryptedFile = req.file;
+
+    if (!encryptedFile || !encryptedFile.buffer) {
       return res.status(400).json({
-        code: 'generic',
-        message: 'No file was uploaded.',
+        error: 'Encrypted file data is required.',
       });
     }
 
-    const room =
-      roomManager.getPublicRoomInfo(roomId);
+    if (!originalName) {
+      return res.status(400).json({
+        error: 'Original file name is required.',
+      });
+    }
+
+    if (!iv) {
+      return res.status(400).json({
+        error: 'Encryption IV is required.',
+      });
+    }
+
+    if (!roomId) {
+      return res.status(400).json({
+        error: 'Room ID is required.',
+      });
+    }
+
+    /*
+     * Make sure the authenticated session belongs to this room.
+     */
+    if (req.session.roomId !== roomId) {
+      return res.status(403).json({
+        error: 'You are not a member of this room.',
+      });
+    }
+
+    /*
+     * Use memoryStore directly.
+     *
+     * roomManager does not expose getRoom().
+     */
+    const room = store.getRoom(roomId);
 
     if (!room) {
       return res.status(404).json({
-        code: 'roomNotFound',
-        message: 'Room not found.',
+        error: 'Room not found.',
       });
     }
 
-    if (!room.fileSharingEnabled) {
-      return res.status(403).json({
-        code: 'unauthorized',
-        message:
-          'File sharing is disabled in this room.',
-      });
-    }
-
+    /*
+     * Store only encrypted bytes.
+     */
     const fileMeta =
       await fileStorageService.saveEncryptedFile({
         roomId,
-        buffer: req.file.buffer,
-        iv,
+        buffer: encryptedFile.buffer,
         originalName,
         mimeType,
-        declaredSize: Number(size),
-        expiresAt: room.expiresAt,
-        uploaderSessionId:
-          req.session.sessionId,
+        declaredSize: size,
+        iv,
+        uploaderSessionId: req.session.sessionId,
       });
+
+    /*
+     * Use participantId as the public sender identifier.
+     *
+     * The private sessionId is never exposed in the message payload.
+     */
+    const senderId =
+      req.session.participantId ||
+      req.session.sessionId;
+
+    const senderName =
+      req.session.anonymousName ||
+      'Anonymous';
 
     const messagePayload =
       createFileMessage({
-        senderId:
-          req.session.participantId ||
-          req.session.sessionId,
-
-        senderName:
-          req.session.anonymousName,
-
+        senderId,
+        senderName,
         file: {
           id: fileMeta.id,
-
           originalName:
             fileMeta.originalName,
-
-          size:
-            fileMeta.size,
-
+          size: fileMeta.size,
           mimeType:
             fileMeta.mimeType,
-
-          /*
-           * Keep the public URL short and room-independent.
-           *
-           * requireSession resolves the room from the
-           * stored file metadata before authenticating it.
-           */
           downloadUrl:
             `/api/files/${fileMeta.id}/download`,
-
-          iv:
-            fileMeta.iv,
-
+          iv: fileMeta.iv,
           expiresAt:
             fileMeta.expiresAt,
         },
       });
 
     /*
-     * The HTTP API must still work when the Socket.IO server
-     * is not attached to the Express app.
+     * IMPORTANT:
+     * Store the message before broadcasting it.
      *
-     * This is also important for tests and for any HTTP-only
-     * deployment/startup path.
+     * The Socket.IO message:delete handler uses memoryStore
+     * to locate the message and determine whether the sender
+     * is allowed to delete it.
      */
-    const io = req.app.get('io');
+    store.addMessage(
+      roomId,
+      messagePayload
+    );
+
+    const io =
+      req.app.get('io');
 
     if (io) {
       io.to(roomId).emit(
@@ -112,87 +143,119 @@ async function uploadFile(req, res, next) {
       );
     }
 
-    return res.status(201).json(
-      messagePayload
+    logger.info(
+      `File uploaded successfully: ${fileMeta.id} in room ${roomId}`
     );
-  } catch (err) {
-    if (
-      err.code === 'FILE_TOO_LARGE' ||
-      err.code === 'INVALID_FILE_TYPE'
-    ) {
-      return res.status(413).json({
-        code: 'generic',
-        message: err.message,
-      });
-    }
 
+    return res.status(201).json({
+      success: true,
+      message: messagePayload,
+    });
+  } catch (error) {
     logger.error(
-      'File upload failed',
-      {
-        code: err.code,
-        message: err.message,
-      }
+      'File upload failed:',
+      error
     );
 
-    next(err);
+    return res.status(500).json({
+      error:
+        error.message ||
+        'File upload failed.',
+    });
   }
 }
 
 /**
- * Download the encrypted file bytes.
+ * Download an encrypted file.
  *
- * The backend NEVER decrypts the file.
- * The frontend downloads these ciphertext bytes and decrypts
- * them locally using the room encryption key.
+ * The server never decrypts the file.
+ * The frontend downloads the encrypted bytes
+ * and decrypts them locally.
  */
-async function downloadFile(
-  req,
-  res,
-  next
-) {
+async function downloadFile(req, res) {
   try {
-    const {
-      fileId,
-    } = req.params;
+    const { fileId } =
+      req.params;
 
-    const result =
+    if (!fileId) {
+      return res.status(400).json({
+        error: 'File ID is required.',
+      });
+    }
+
+    if (!req.session) {
+      return res.status(401).json({
+        error: 'Authentication required.',
+      });
+    }
+
+    const fileMeta =
+      store.getFile(fileId);
+
+    if (!fileMeta) {
+      return res.status(404).json({
+        error: 'File not found.',
+      });
+    }
+
+    /*
+     * Make sure the file belongs to the
+     * authenticated room.
+     */
+    if (
+      fileMeta.roomId !==
+      req.session.roomId
+    ) {
+      return res.status(403).json({
+        error:
+          'You do not have access to this file.',
+      });
+    }
+
+    /*
+     * getFileStream also handles expiry
+     * and removes expired files.
+     */
+    const fileStreamResult =
       await fileStorageService.getFileStream(
         fileId
       );
 
-    if (!result) {
+    if (!fileStreamResult) {
       return res.status(404).json({
-        code: 'generic',
-        message:
-          'File not found or has expired.',
+        error:
+          'File not found or expired.',
       });
     }
 
     /*
-     * requireSession has already verified that the
-     * authenticated session belongs to the same room
-     * as this file.
+     * fileStorageService returns:
      *
-     * Keep this second check as defense in depth.
+     * {
+     *   stream,
+     *   meta
+     * }
+     *
+     * Normalize it here so the rest of
+     * this controller uses "file".
      */
-    if (
-      req.session?.roomId &&
-      result.meta.roomId !==
-        req.session.roomId
-    ) {
-      return res.status(403).json({
-        code: 'unauthorized',
-        message:
-          'This file does not belong to this room.',
+    const stream =
+      fileStreamResult.stream;
+
+    const file =
+      fileStreamResult.meta;
+
+    if (!stream || !file) {
+      return res.status(404).json({
+        error:
+          'File data is unavailable.',
       });
     }
 
     /*
-     * Never trust the client-supplied MIME type when
-     * serving encrypted bytes.
+     * Always return encrypted bytes.
      *
-     * Always force an attachment containing opaque
-     * application/octet-stream data.
+     * The frontend performs decryption.
      */
     res.setHeader(
       'Content-Type',
@@ -201,68 +264,200 @@ async function downloadFile(
 
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${result.meta.storageFilename}"`
+      `attachment; filename="${encodeURIComponent(
+        file.originalName ||
+          'download'
+      )}"`
     );
 
-    result.stream.pipe(res);
+    if (file.size != null) {
+      res.setHeader(
+        'Content-Length',
+        String(file.size)
+      );
+    }
 
-    return undefined;
-  } catch (err) {
-    next(err);
+    stream.on(
+      'error',
+      (error) => {
+        logger.error(
+          `File download stream failed for ${fileId}:`,
+          error
+        );
+
+        if (!res.headersSent) {
+          res.status(500).json({
+            error:
+              'File download failed.',
+          });
+        } else {
+          res.destroy(error);
+        }
+      }
+    );
+
+    stream.pipe(res);
+  } catch (error) {
+    logger.error(
+      'File download failed:',
+      error
+    );
+
+    if (!res.headersSent) {
+      return res.status(500).json({
+        error:
+          error.message ||
+          'File download failed.',
+      });
+    }
+
+    res.destroy(error);
   }
 }
 
 /**
- * Delete a temporary file.
+ * Delete a file and its associated chat message.
  *
- * Only:
- * - the uploader, or
- * - the room owner
- *
- * may delete it.
+ * This is important for both normal files
+ * and voice messages, because voice messages
+ * use the same file-message architecture.
  */
-async function deleteFile(
-  req,
-  res,
-  next
-) {
+async function deleteFile(req, res) {
   try {
-    const deleted =
-      await fileStorageService.deleteFile(
-        req.params.fileId,
-        req.session.sessionId,
-        req.session.isOwner
-      );
+    const { fileId } =
+      req.params;
 
-    if (!deleted) {
-      return res.status(403).json({
-        code: 'unauthorized',
-        message:
-          'You can’t delete this file.',
+    if (!fileId) {
+      return res.status(400).json({
+        error: 'File ID is required.',
+      });
+    }
+
+    if (!req.session) {
+      return res.status(401).json({
+        error: 'Authentication required.',
+      });
+    }
+
+    const roomId =
+      req.session.roomId;
+
+    if (!roomId) {
+      return res.status(400).json({
+        error:
+          'Session is not associated with a room.',
       });
     }
 
     /*
-     * HTTP deletion must work even if Socket.IO
-     * is not currently attached.
+     * Find the associated message before deleting anything.
+     *
+     * File-message IDs are intentionally
+     * the same as file IDs.
      */
-    const io = req.app.get('io');
+    const message =
+      store.getMessage(
+        roomId,
+        fileId
+      );
+
+    if (
+      message &&
+      (
+        message.type !== 'file' ||
+        !message.file ||
+        message.file.id !== fileId
+      )
+    ) {
+      return res.status(409).json({
+        error:
+          'The file is not associated with a valid file message.',
+      });
+    }
+
+    /*
+     * Delete the encrypted bytes and
+     * file metadata.
+     *
+     * fileStorageService performs
+     * uploader/owner authorization.
+     */
+    const deleted =
+      await fileStorageService.deleteFile(
+        fileId,
+        req.session.sessionId,
+        Boolean(
+          req.session.isOwner
+        )
+      );
+
+    if (!deleted) {
+      return res.status(404).json({
+        error:
+          'File not found or you are not allowed to delete it.',
+      });
+    }
+
+    /*
+     * Remove the associated chat message
+     * from memoryStore as well.
+     *
+     * Without this, the UI disappears temporarily
+     * because of message:delete, but the old message
+     * can come back after reconnect/history loading.
+     */
+    if (message) {
+      const removedMessage =
+        store.removeMessage(
+          roomId,
+          message.id
+        );
+
+      if (!removedMessage) {
+        logger.warn(
+          `File ${fileId} was deleted but its message ${message.id} could not be removed from room ${roomId}.`
+        );
+      }
+    }
+
+    /*
+     * Notify every connected participant
+     * so the message disappears from everyone's
+     * chat immediately.
+     *
+     * The file message ID equals the file ID.
+     */
+    const io =
+      req.app.get('io');
 
     if (io) {
-      io.to(req.session.roomId).emit(
+      io.to(roomId).emit(
         'message:delete',
         {
-          messageId:
-            req.params.fileId,
+          messageId: fileId,
         }
       );
     }
 
-    return res.status(200).json({
-      deleted: true,
+    logger.info(
+      `File deleted successfully: ${fileId} from room ${roomId}`
+    );
+
+    return res.json({
+      success: true,
+      messageId: fileId,
     });
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    logger.error(
+      'File deletion failed:',
+      error
+    );
+
+    return res.status(500).json({
+      error:
+        error.message ||
+        'File deletion failed.',
+    });
   }
 }
 

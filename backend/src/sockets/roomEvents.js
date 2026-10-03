@@ -1,5 +1,6 @@
 const roomManager = require('../services/roomManager');
 const sessionManager = require('../services/sessionManager');
+const fileStorageService = require('../services/fileStorageService');
 const store = require('../storage/memoryStore');
 
 const {
@@ -550,6 +551,171 @@ function registerRoomEvents(
           )
         );
       } catch (error) {
+        emitError(
+          socket,
+          error.message
+        );
+      }
+    }
+  );
+
+  /**
+   * Delete a message.
+   *
+   * This handles BOTH:
+   *   - normal text messages
+   *   - file/voice messages
+   *
+   * The sender can delete only their own message.
+   *
+   * For file/voice messages:
+   *   1. The encrypted file is removed from storage.
+   *   2. The file metadata is removed.
+   *   3. The message is removed from the room.
+   *
+   * Finally:
+   *   message:delete is broadcast to EVERY participant.
+   *
+   * IMPORTANT:
+   * The client sends only the message ID.
+   */
+  socket.on(
+    'message:delete',
+    async ({
+      messageId,
+    } = {}) => {
+      try {
+        if (!messageId) {
+          throw new Error(
+            'Message ID is required.'
+          );
+        }
+
+        /*
+         * Make sure the message actually belongs
+         * to this room.
+         */
+        const message =
+          store.getMessage(
+            roomId,
+            messageId
+          );
+
+        if (!message) {
+          throw new Error(
+            'Message not found.'
+          );
+        }
+
+        /*
+         * Only the original sender may delete
+         * their own message.
+         *
+         * Messages use the PUBLIC participantId
+         * as senderId.
+         */
+        if (
+          message.senderId !==
+          socket.data.participantId
+        ) {
+          throw new Error(
+            'You can only delete your own messages.'
+          );
+        }
+
+        /*
+         * File and voice messages both use
+         * message.type === "file".
+         *
+         * Delete the encrypted file from disk
+         * before removing the message.
+         *
+         * deleteFile() also verifies the uploader
+         * session internally.
+         */
+        if (
+          message.type === 'file' &&
+          message.file &&
+          message.file.id
+        ) {
+          const deleted =
+            await fileStorageService.deleteFile(
+              message.file.id,
+              sessionId,
+              Boolean(
+                socket.data.isOwner
+              )
+            );
+
+          /*
+           * If the file metadata exists but the
+           * requester is not allowed to delete it,
+           * fail the entire message deletion.
+           */
+          if (!deleted) {
+            throw new Error(
+              'You are not allowed to delete this file.'
+            );
+          }
+        }
+
+        /*
+         * Remove the message from the in-memory
+         * room message buffer.
+         */
+        const removed =
+          store.removeMessage(
+            roomId,
+            messageId
+          );
+
+        if (!removed) {
+          throw new Error(
+            'Message could not be deleted.'
+          );
+        }
+
+        /*
+         * IMPORTANT:
+         *
+         * Use io.to(roomId), NOT socket.emit()
+         * or socket.to(roomId).
+         *
+         * This sends the deletion event to:
+         *   - the sender
+         *   - every other participant
+         */
+        io.to(roomId).emit(
+          'message:delete',
+          {
+            messageId,
+          }
+        );
+
+        logger.info(
+          'Message deleted',
+          {
+            roomId,
+            messageId,
+            participantId:
+              socket.data.participantId,
+            messageType:
+              message.type || 'unknown',
+          }
+        );
+      } catch (error) {
+        logger.warn(
+          'Failed to delete message',
+          {
+            roomId,
+            messageId,
+            participantId:
+              socket.data.participantId,
+            error:
+              error.message,
+          }
+        );
+
         emitError(
           socket,
           error.message

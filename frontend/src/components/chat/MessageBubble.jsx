@@ -1356,11 +1356,6 @@ export default function MessageBubble({
 
   const handleAudioEnded =
     () => {
-      /*
-       * Keep the waveform at 100% for
-       * the exact duration until the
-       * playback state is reset.
-       */
       if (
         Number.isFinite(
           Number(voiceDuration)
@@ -1374,19 +1369,11 @@ export default function MessageBubble({
 
       setVoicePlaying(false);
 
-      /*
-       * Reset actual audio position
-       * after the UI has reached 100%.
-       */
       if (audioRef.current) {
         audioRef.current.currentTime =
           0;
       }
 
-      /*
-       * Return the visual progress
-       * to 0 after a short tick.
-       */
       requestAnimationFrame(() => {
         if (
           mountedRef.current
@@ -1534,7 +1521,23 @@ export default function MessageBubble({
         return;
       }
 
-      onDelete();
+      /*
+       * Pass the complete message object.
+       *
+       * Text messages can still be deleted exactly
+       * as before.
+       *
+       * Voice/file messages need the complete object
+       * because the parent needs access to:
+       *
+       * message.id
+       * message.type
+       * message.file.id
+       * message.file.downloadUrl
+       *
+       * depending on the delete implementation.
+       */
+      onDelete(message);
     };
 
   // ------------------------------------------------
@@ -1580,15 +1583,6 @@ export default function MessageBubble({
         ? Number(voiceCurrentTime)
         : 0;
 
-    /*
-     * EXACT waveform progress.
-     *
-     * Example:
-     * duration = 10 seconds
-     * currentTime = 5 seconds
-     *
-     * progress = 0.5
-     */
     const progress =
       duration > 0
         ? Math.min(

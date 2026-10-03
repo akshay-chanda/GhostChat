@@ -166,7 +166,6 @@ export default function ChatWindow({
           overscroll-contain
           scroll-smooth
 
-          /* Same left/right message spacing */
           px-3
           py-2.5
 
@@ -294,14 +293,36 @@ export default function ChatWindow({
                   message={msg}
                   isOwn={isOwn}
                   grouped={grouped}
+
+                  /*
+                   * IMPORTANT:
+                   *
+                   * Pass the complete message object
+                   * instead of only msg.id.
+                   *
+                   * Text messages need msg.id.
+                   *
+                   * Voice/file messages additionally need
+                   * information such as:
+                   *
+                   * msg.type
+                   * msg.file.id
+                   * msg.file.downloadUrl
+                   * msg.file.iv
+                   *
+                   * The parent delete handler can now decide
+                   * how to delete the message/file on the
+                   * backend and broadcast the deletion.
+                   */
                   onDelete={
                     isOwn
                       ? () =>
                           onDeleteMessage?.(
-                            msg.id
+                            msg
                           )
                       : undefined
                   }
+
                   onReply={() =>
                     onReplyTo?.(msg)
                   }

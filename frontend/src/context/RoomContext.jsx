@@ -441,6 +441,19 @@ export function RoomProvider({
           return;
         }
 
+        /*
+         * The backend is authoritative for deletion.
+         *
+         * This event is sent after:
+         *
+         * 1. Ownership was verified.
+         * 2. File/voice encrypted bytes were deleted.
+         * 3. File metadata was deleted.
+         * 4. The message was removed from memoryStore.
+         *
+         * Therefore BOTH the sender and all receivers
+         * remove the message here.
+         */
         setMessages(
           (previousMessages) =>
             previousMessages.filter(
@@ -600,20 +613,60 @@ export function RoomProvider({
   // --------------------------------------------------
 
   const deleteMessage = useCallback(
-    (messageId) => {
-      if (!messageId) {
+    (message) => {
+      /*
+       * ChatWindow passes the COMPLETE message object.
+       *
+       * Text message:
+       *   message.id
+       *
+       * Voice/file message:
+       *   message.id
+       *   message.file.id
+       *
+       * The backend uses message.id as the authoritative
+       * message identifier.
+       */
+      if (!message) {
         return;
       }
 
-      emitDeleteMessage(messageId);
+      /*
+       * Keep compatibility with callers that may still
+       * pass a plain message ID.
+       */
+      const messageId =
+        typeof message === 'string'
+          ? message
+          : message.id;
 
-      setMessages(
-        (previousMessages) =>
-          previousMessages.filter(
-            (message) =>
-              message.id !== messageId
-          )
-      );
+      if (!messageId) {
+        console.warn(
+          '[RoomContext] Cannot delete message without an ID:',
+          message
+        );
+
+        return;
+      }
+
+      /*
+       * IMPORTANT:
+       *
+       * Do NOT remove the message locally here.
+       *
+       * The backend is responsible for:
+       *
+       * 1. Authenticating the requester.
+       * 2. Verifying message ownership.
+       * 3. Deleting encrypted file/voice bytes.
+       * 4. Deleting file metadata.
+       * 5. Removing the message from memoryStore.
+       * 6. Broadcasting message:delete to everyone.
+       *
+       * The `message:delete` listener above then removes
+       * the message from this client's UI.
+       */
+      emitDeleteMessage(messageId);
     },
     []
   );
