@@ -9,6 +9,7 @@ import {
   ChevronDown,
   Check,
   ArrowRight,
+  Mic,
 } from 'lucide-react';
 
 const SECTIONS = [
@@ -16,50 +17,82 @@ const SECTIONS = [
     id: 'collection',
     heading: 'What we intentionally don’t collect',
     icon: UserRoundX,
-    summary: 'No account, email, phone number, or real name is required.',
-    body: 'GhostChat does not require an account, email address, phone number, or real name. Creating or joining a room does not require you to provide any of these details.',
+    summary:
+      'No account, email, phone number, or real name is required.',
+    body:
+      'GhostChat does not require an account, email address, phone number, or real name. Creating or joining a room does not require you to provide any of these details. GhostChat is designed around temporary anonymous sessions rather than permanent user profiles.',
   },
   {
     id: 'sessions',
     heading: 'Temporary anonymous sessions',
     icon: ShieldCheck,
-    summary: 'Your session credentials exist only in browser memory.',
-    body: 'Creating or joining a room creates a temporary anonymous session. Session credentials are kept in browser memory and are not stored in cookies, localStorage, or sessionStorage. Refreshing the page ends the frontend session by design.',
+    summary:
+      'Your session credentials exist only in browser memory.',
+    body:
+      'Creating or joining a room creates a temporary anonymous session. Session credentials are kept in browser memory and are not stored in cookies, localStorage, or sessionStorage. Authenticated HTTP requests use private X-Session-Id and X-Session-Secret headers. Refreshing the page ends the frontend session by design.',
   },
   {
     id: 'messages',
     heading: 'Messages and encryption',
     icon: LockKeyhole,
-    summary: 'Messages are encrypted before they reach the server.',
-    body: 'Messages are encrypted in your browser using AES-256-GCM before being sent to the application server. The room encryption key is derived from the room password in the browser. The server handles encrypted message data rather than plaintext message content.',
+    summary:
+      'Messages are encrypted before they reach the server.',
+    body:
+      'Messages are encrypted in your browser using AES-256-GCM before being sent to the application server. The room encryption key is derived from the room password in the browser. The server handles encrypted message data rather than plaintext message content.',
   },
   {
     id: 'passwords',
     heading: 'Room passwords',
     icon: LockKeyhole,
-    summary: 'Passwords are protected with Argon2id verification data.',
-    body: 'The room password is submitted to the server when creating or joining a room so the server can authenticate access. Password verification data is protected using Argon2id rather than storing the password as plaintext. A fully compromised server could potentially capture a submitted password and derive the room encryption key.',
+    summary:
+      'Passwords are protected with Argon2id verification data.',
+    body:
+      'The room password is submitted to the server when creating or joining a room so the server can authenticate access. Password verification data is protected using Argon2id rather than storing the password as plaintext. The room password is also used by the browser to derive the room encryption key. A fully compromised server could potentially capture a submitted password and use it to derive the room encryption key.',
   },
   {
     id: 'files',
-    heading: 'Files',
+    heading: 'Files and voice messages',
     icon: FileLock2,
-    summary: 'Files are encrypted before upload and remain temporary.',
-    body: 'Files are encrypted in your browser before upload. The server stores the encrypted file data using a random server-side filename. Files are deleted when their associated room expires or is destroyed.',
+    summary:
+      'Files and voice recordings are encrypted before upload.',
+    body:
+      'Files and voice recordings are encrypted in your browser before upload. The server stores only the encrypted bytes and associated temporary metadata needed to deliver the content. The server does not decrypt the file or voice contents. Uploaded data is temporary and is removed when the associated room expires or is destroyed. A file can also be explicitly deleted by its uploader or the room owner.',
   },
   {
     id: 'deletion',
     heading: 'Room lifetime and deletion',
     icon: Clock3,
-    summary: 'Rooms and their temporary data disappear when the room ends.',
-    body: 'Rooms have a user-selected expiration time. When a room expires or the owner destroys it, the application removes its participants, messages, room state, file metadata, and associated uploaded files.',
+    summary:
+      'Rooms and their temporary data disappear when the room ends.',
+    body:
+      'Rooms have a user-selected expiration time. When a room expires or the owner destroys it, the application removes its participants, messages, room state, file metadata, and associated uploaded encrypted files. File deletion also removes the associated file message from the room.',
   },
   {
     id: 'visibility',
     heading: 'Who can see your messages',
     icon: ServerOff,
-    summary: 'Participants can see content after it is decrypted.',
-    body: 'The people participating in a room can see messages after their browsers decrypt them. Anyone who gains access to a participant’s device, browser, or browser extension may potentially access that content.',
+    summary:
+      'Participants can see content after it is decrypted.',
+    body:
+      'The people participating in a room can see messages after their browsers decrypt them. Anyone who gains access to a participant’s device, browser, or browser extension may potentially access that content. GhostChat cannot control what another participant chooses to save, copy, photograph, record, or share.',
+  },
+  {
+    id: 'screenshots',
+    heading: 'Screenshot detection',
+    icon: ShieldCheck,
+    summary:
+      'GhostChat provides best-effort screenshot notifications.',
+    body:
+      'GhostChat can detect certain browser-level screenshot signals and notify other participants when a supported signal is detected. This is best-effort only. A normal website cannot reliably detect every screenshot, screen recording, mobile system screenshot, external camera capture, or other method of copying what is displayed.',
+  },
+  {
+    id: 'logging',
+    heading: 'Application logging',
+    icon: ServerOff,
+    summary:
+      'Application logs are designed to avoid sensitive content.',
+    body:
+      'GhostChat application logging is designed not to record message contents, plaintext passwords, encryption keys, or similar sensitive message data. Operational logs may still contain non-content information needed to diagnose and operate the service.',
   },
 ];
 
@@ -67,12 +100,17 @@ const AT_A_GLANCE = [
   'No accounts required',
   'No email or phone required',
   'Messages encrypted in the browser',
-  'Files encrypted before upload',
-  'Temporary rooms',
+  'Files and voice encrypted before upload',
+  'Temporary rooms and encrypted attachments',
   'Session credentials not stored in browser storage',
+  'Application logs avoid message content and encryption keys',
 ];
 
-function PrivacySection({ section, isOpen, onToggle }) {
+function PrivacySection({
+  section,
+  isOpen,
+  onToggle,
+}) {
   const Icon = section.icon;
 
   return (
@@ -125,10 +163,13 @@ function PrivacySection({ section, isOpen, onToggle }) {
 }
 
 export default function PrivacyPolicyPage() {
-  const [openSection, setOpenSection] = useState('collection');
+  const [openSection, setOpenSection] =
+    useState('collection');
 
   const toggleSection = (id) => {
-    setOpenSection((current) => (current === id ? null : id));
+    setOpenSection((current) =>
+      current === id ? null : id
+    );
   };
 
   return (
@@ -222,7 +263,7 @@ export default function PrivacyPolicyPage() {
               {
                 number: '02',
                 title: 'Encrypt',
-                text: 'Messages and files are encrypted in your browser.',
+                text: 'Messages, files, and voice recordings are encrypted in your browser.',
               },
               {
                 number: '03',
@@ -232,7 +273,7 @@ export default function PrivacyPolicyPage() {
               {
                 number: '04',
                 title: 'Expire',
-                text: 'Room state and associated files are deleted.',
+                text: 'Room state, messages, metadata, and associated encrypted files are deleted.',
               },
             ].map((step, index) => (
               <div
@@ -280,7 +321,9 @@ export default function PrivacyPolicyPage() {
                 key={section.id}
                 section={section}
                 isOpen={openSection === section.id}
-                onToggle={() => toggleSection(section.id)}
+                onToggle={() =>
+                  toggleSection(section.id)
+                }
               />
             ))}
           </div>
@@ -321,8 +364,8 @@ export default function PrivacyPolicyPage() {
 
                 <p className="text-sm text-[#94A3B8] leading-relaxed">
                   GhostChat&apos;s application logging is designed not to write
-                  message content, room passwords, or derived encryption keys
-                  to logs controlled by the application.
+                  message content, plaintext room passwords, encryption keys,
+                  or similar sensitive content to application logs.
                 </p>
               </div>
             </div>
@@ -346,14 +389,20 @@ export default function PrivacyPolicyPage() {
 
             <p className="text-sm text-[#94A3B8] leading-relaxed">
               Participants can screenshot, record, copy, photograph, or share
-              information displayed on their devices. Browser extensions or
-              compromised devices may also access messages after decryption.
+              information displayed on their devices. GhostChat may notify
+              other participants when a supported browser screenshot signal is
+              detected, but this detection is not guaranteed.
+            </p>
+
+            <p className="text-sm text-[#94A3B8] leading-relaxed">
+              Browser extensions or compromised devices may access messages
+              after decryption.
             </p>
 
             <p className="text-sm text-[#94A3B8] leading-relaxed">
               GhostChat does not currently provide forward secrecy within a
-              room&apos;s lifetime. Anyone who obtains the room password can
-              derive the room encryption key while that room exists.
+              room&apos;s lifetime. Anyone who obtains the room password may be
+              able to derive the room encryption key while that room exists.
             </p>
           </div>
         </div>
@@ -365,6 +414,7 @@ export default function PrivacyPolicyPage() {
             className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#00D9FF]/20 bg-[#00D9FF]/5 px-5 py-3 text-sm font-medium text-[#00D9FF] transition-colors hover:bg-[#00D9FF]/10"
           >
             Explore Security Center
+
             <ArrowRight
               className="h-4 w-4"
               aria-hidden="true"
@@ -381,7 +431,8 @@ export default function PrivacyPolicyPage() {
 
         <p className="mt-8 text-xs text-[#94A3B8] leading-relaxed">
           This policy describes the current GhostChat implementation and its
-          documented data-handling boundaries.
+          documented data-handling boundaries. It does not guarantee that
+          third-party infrastructure providers retain no operational metadata.
         </p>
       </div>
     </section>
