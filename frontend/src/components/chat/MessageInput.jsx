@@ -82,7 +82,9 @@ export default function MessageInput({
       }
 
       if (analyserAnimationRef.current) {
-        cancelAnimationFrame(analyserAnimationRef.current);
+        cancelAnimationFrame(
+          analyserAnimationRef.current
+        );
         analyserAnimationRef.current = null;
       }
 
@@ -92,6 +94,7 @@ export default function MessageInput({
         try {
           recorder.onstop = null;
           recorder.onerror = null;
+          recorder.ondataavailable = null;
 
           if (recorder.state !== 'inactive') {
             recorder.stop();
@@ -101,13 +104,15 @@ export default function MessageInput({
         }
       }
 
-      mediaStreamRef.current?.getTracks().forEach((track) => {
-        try {
-          track.stop();
-        } catch {
-          // Ignore track cleanup errors.
+      mediaStreamRef.current?.getTracks().forEach(
+        (track) => {
+          try {
+            track.stop();
+          } catch {
+            // Ignore track cleanup errors.
+          }
         }
-      });
+      );
 
       mediaStreamRef.current = null;
 
@@ -278,7 +283,10 @@ export default function MessageInput({
 
   const stopMicrophoneDiagnostics = useCallback(() => {
     if (analyserAnimationRef.current) {
-      cancelAnimationFrame(analyserAnimationRef.current);
+      cancelAnimationFrame(
+        analyserAnimationRef.current
+      );
+
       analyserAnimationRef.current = null;
     }
 
@@ -298,7 +306,9 @@ export default function MessageInput({
 
     if (audioContext) {
       try {
-        audioContext.close();
+        if (audioContext.state !== 'closed') {
+          audioContext.close();
+        }
       } catch {
         // Ignore cleanup errors.
       }
@@ -311,132 +321,146 @@ export default function MessageInput({
   // START MICROPHONE DIAGNOSTICS
   // --------------------------------------------------
 
-  const startMicrophoneDiagnostics = useCallback((stream) => {
-    const AudioContextClass =
-      window.AudioContext ||
-      window.webkitAudioContext;
+  const startMicrophoneDiagnostics = useCallback(
+    async (stream) => {
+      const AudioContextClass =
+        window.AudioContext ||
+        window.webkitAudioContext;
 
-    if (!AudioContextClass) {
-      console.warn(
-        'Voice microphone diagnostics unavailable: AudioContext not supported.'
-      );
-
-      return;
-    }
-
-    try {
-      const audioContext = new AudioContextClass();
-
-      const source =
-        audioContext.createMediaStreamSource(stream);
-
-      const analyser =
-        audioContext.createAnalyser();
-
-      analyser.fftSize = 2048;
-      analyser.smoothingTimeConstant = 0.15;
-
-      source.connect(analyser);
-
-      audioContextRef.current = audioContext;
-      microphoneSourceRef.current = source;
-      analyserRef.current = analyser;
-
-      const data =
-        new Uint8Array(
-          analyser.fftSize
+      if (!AudioContextClass) {
+        console.warn(
+          'Voice microphone diagnostics unavailable: AudioContext not supported.'
         );
 
-      analyserDataRef.current = data;
+        return;
+      }
 
-      microphonePeakRef.current = 0;
-      microphoneSamplesDetectedRef.current = false;
+      try {
+        // Make absolutely sure no previous context survives.
+        stopMicrophoneDiagnostics();
 
-      const inspectMicrophone = () => {
-        const currentAnalyser =
-          analyserRef.current;
+        const audioContext =
+          new AudioContextClass();
 
-        const currentData =
-          analyserDataRef.current;
-
-        if (!currentAnalyser || !currentData) {
-          return;
-        }
-
-        currentAnalyser.getByteTimeDomainData(
-          currentData
-        );
-
-        let peak = 0;
-
-        for (
-          let i = 0;
-          i < currentData.length;
-          i++
-        ) {
-          const normalized =
-            Math.abs(
-              (currentData[i] - 128) / 128
-            );
-
-          if (normalized > peak) {
-            peak = normalized;
+        if (audioContext.state === 'suspended') {
+          try {
+            await audioContext.resume();
+          } catch {
+            // Diagnostics only.
           }
         }
 
-        if (
-          peak >
-          microphonePeakRef.current
-        ) {
-          microphonePeakRef.current = peak;
-        }
-
-        /*
-         * A value above ~0.005 means the microphone
-         * is receiving a measurable waveform.
-         *
-         * We intentionally use a very low threshold
-         * because quiet microphones can still be valid.
-         */
-        if (peak > 0.005) {
-          microphoneSamplesDetectedRef.current =
-            true;
-        }
-
-        analyserAnimationRef.current =
-          requestAnimationFrame(
-            inspectMicrophone
+        const source =
+          audioContext.createMediaStreamSource(
+            stream
           );
-      };
 
-      if (audioContext.state === 'suspended') {
-        audioContext.resume().catch(() => {
-          // Diagnostics only.
-        });
+        const analyser =
+          audioContext.createAnalyser();
+
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.15;
+
+        source.connect(analyser);
+
+        audioContextRef.current =
+          audioContext;
+
+        microphoneSourceRef.current =
+          source;
+
+        analyserRef.current =
+          analyser;
+
+        const data =
+          new Uint8Array(
+            analyser.fftSize
+          );
+
+        analyserDataRef.current = data;
+
+        microphonePeakRef.current = 0;
+        microphoneSamplesDetectedRef.current =
+          false;
+
+        const inspectMicrophone = () => {
+          const currentAnalyser =
+            analyserRef.current;
+
+          const currentData =
+            analyserDataRef.current;
+
+          if (
+            !currentAnalyser ||
+            !currentData
+          ) {
+            return;
+          }
+
+          currentAnalyser.getByteTimeDomainData(
+            currentData
+          );
+
+          let peak = 0;
+
+          for (
+            let i = 0;
+            i < currentData.length;
+            i += 1
+          ) {
+            const normalized =
+              Math.abs(
+                (currentData[i] - 128) / 128
+              );
+
+            if (normalized > peak) {
+              peak = normalized;
+            }
+          }
+
+          if (
+            peak >
+            microphonePeakRef.current
+          ) {
+            microphonePeakRef.current =
+              peak;
+          }
+
+          if (peak > 0.005) {
+            microphoneSamplesDetectedRef.current =
+              true;
+          }
+
+          analyserAnimationRef.current =
+            requestAnimationFrame(
+              inspectMicrophone
+            );
+        };
+
+        inspectMicrophone();
+
+        console.log(
+          'Voice microphone diagnostics started:',
+          {
+            audioContextState:
+              audioContext.state,
+            sampleRate:
+              audioContext.sampleRate,
+            fftSize:
+              analyser.fftSize,
+          }
+        );
+      } catch (error) {
+        console.warn(
+          'Voice microphone diagnostics could not start:',
+          error
+        );
+
+        stopMicrophoneDiagnostics();
       }
-
-      inspectMicrophone();
-
-      console.log(
-        'Voice microphone diagnostics started:',
-        {
-          audioContextState:
-            audioContext.state,
-          sampleRate:
-            audioContext.sampleRate,
-          fftSize:
-            analyser.fftSize,
-        }
-      );
-    } catch (error) {
-      console.warn(
-        'Voice microphone diagnostics could not start:',
-        error
-      );
-
-      stopMicrophoneDiagnostics();
-    }
-  }, [stopMicrophoneDiagnostics]);
+    },
+    [stopMicrophoneDiagnostics]
+  );
 
   // --------------------------------------------------
   // STOP MEDIA STREAM
@@ -466,14 +490,31 @@ export default function MessageInput({
 
   const resetRecordingState = useCallback(() => {
     if (recordingTimerRef.current) {
-      clearInterval(recordingTimerRef.current);
+      clearInterval(
+        recordingTimerRef.current
+      );
+
       recordingTimerRef.current = null;
     }
 
     stopMicrophoneDiagnostics();
     stopMediaStream();
 
+    const recorder =
+      mediaRecorderRef.current;
+
+    if (recorder) {
+      try {
+        recorder.ondataavailable = null;
+        recorder.onstop = null;
+        recorder.onerror = null;
+      } catch {
+        // Ignore cleanup errors.
+      }
+    }
+
     mediaRecorderRef.current = null;
+
     recordingChunksRef.current = [];
     recordingStartTimeRef.current = null;
     stoppingRecordingRef.current = false;
@@ -510,85 +551,139 @@ export default function MessageInput({
         const testAudio =
           document.createElement('audio');
 
-        testAudio.preload = 'auto';
+        testAudio.preload = 'metadata';
         testAudio.src = testUrl;
 
+        /*
+         * IMPORTANT:
+         *
+         * WebM duration metadata can be Infinity/NaN,
+         * especially on recordings created after a
+         * previous recording.
+         *
+         * Therefore metadata duration is only a hint.
+         * It must NOT cause immediate rejection.
+         */
         const metadataDuration =
-          await new Promise(
-            (resolve, reject) => {
-              let finished = false;
+          await new Promise((resolve) => {
+            let finished = false;
 
-              const cleanup = () => {
-                testAudio.removeEventListener(
-                  'loadedmetadata',
-                  handleMetadata
-                );
-
-                testAudio.removeEventListener(
-                  'error',
-                  handleError
-                );
-              };
-
-              const handleMetadata = () => {
-                if (finished) {
-                  return;
-                }
-
-                finished = true;
-                cleanup();
-
-                const duration =
-                  Number(
-                    testAudio.duration
-                  );
-
-                if (
-                  !Number.isFinite(
-                    duration
-                  ) ||
-                  duration <= 0
-                ) {
-                  reject(
-                    new Error(
-                      'The recorded audio has no valid duration.'
-                    )
-                  );
-
-                  return;
-                }
-
-                resolve(duration);
-              };
-
-              const handleError = () => {
-                if (finished) {
-                  return;
-                }
-
-                finished = true;
-                cleanup();
-
-                reject(
-                  new Error(
-                    'The browser could not decode the recorded audio.'
-                  )
-                );
-              };
-
-              testAudio.addEventListener(
+            const cleanup = () => {
+              testAudio.removeEventListener(
                 'loadedmetadata',
                 handleMetadata
               );
 
-              testAudio.addEventListener(
+              testAudio.removeEventListener(
+                'durationchange',
+                handleDurationChange
+              );
+
+              testAudio.removeEventListener(
                 'error',
                 handleError
               );
+            };
 
-              testAudio.load();
-            }
-          );
+            const finish = (duration) => {
+              if (finished) {
+                return;
+              }
+
+              finished = true;
+              cleanup();
+
+              const numericDuration =
+                Number(duration);
+
+              if (
+                Number.isFinite(
+                  numericDuration
+                ) &&
+                numericDuration > 0
+              ) {
+                resolve(numericDuration);
+              } else {
+                /*
+                 * Do NOT reject here.
+                 *
+                 * decodeAudioData below can still
+                 * determine the real duration.
+                 */
+                resolve(0);
+              }
+            };
+
+            const handleMetadata = () => {
+              finish(
+                testAudio.duration
+              );
+            };
+
+            const handleDurationChange = () => {
+              const duration =
+                Number(
+                  testAudio.duration
+                );
+
+              if (
+                Number.isFinite(
+                  duration
+                ) &&
+                duration > 0
+              ) {
+                finish(duration);
+              }
+            };
+
+            const handleError = () => {
+              if (finished) {
+                return;
+              }
+
+              finished = true;
+              cleanup();
+
+              /*
+               * Don't immediately reject here either.
+               * Web Audio decoding below is the real
+               * validation step.
+               */
+              resolve(0);
+            };
+
+            testAudio.addEventListener(
+              'loadedmetadata',
+              handleMetadata
+            );
+
+            testAudio.addEventListener(
+              'durationchange',
+              handleDurationChange
+            );
+
+            testAudio.addEventListener(
+              'error',
+              handleError
+            );
+
+            testAudio.load();
+
+            /*
+             * Some browsers can leave metadata unresolved.
+             * Give it a short window, then continue to
+             * Web Audio decoding.
+             */
+            setTimeout(() => {
+              if (finished) {
+                return;
+              }
+
+              finish(
+                testAudio.duration
+              );
+            }, 1500);
+          });
 
         // --------------------------------------------------
         // WEB AUDIO VALIDATION
@@ -649,7 +744,7 @@ export default function MessageInput({
             for (
               let channel = 0;
               channel < channels;
-              channel++
+              channel += 1
             ) {
               const data =
                 decoded.getChannelData(
@@ -719,21 +814,38 @@ export default function MessageInput({
             }
           } finally {
             try {
-              await audioContext.close();
+              if (
+                audioContext.state !==
+                'closed'
+              ) {
+                await audioContext.close();
+              }
             } catch {
               // Ignore cleanup errors.
             }
           }
         }
 
+        /*
+         * Prefer decoded duration.
+         *
+         * Only fall back to metadata duration if
+         * Web Audio isn't available.
+         */
+        if (
+          !Number.isFinite(
+            decodedDuration
+          ) ||
+          decodedDuration <= 0
+        ) {
+          throw new Error(
+            'The recorded audio has no valid duration.'
+          );
+        }
+
         return {
           duration:
-            Number.isFinite(
-              decodedDuration
-            ) &&
-            decodedDuration > 0
-              ? decodedDuration
-              : metadataDuration,
+            decodedDuration,
         };
       } finally {
         URL.revokeObjectURL(testUrl);
@@ -802,6 +914,40 @@ export default function MessageInput({
       setVoiceError(null);
       setSendError(null);
 
+      /*
+       * Extra protection against stale state from
+       * a previous recording.
+       */
+      if (recordingTimerRef.current) {
+        clearInterval(
+          recordingTimerRef.current
+        );
+
+        recordingTimerRef.current = null;
+      }
+
+      if (mediaRecorderRef.current) {
+        try {
+          mediaRecorderRef.current.ondataavailable =
+            null;
+          mediaRecorderRef.current.onstop =
+            null;
+          mediaRecorderRef.current.onerror =
+            null;
+        } catch {
+          // Ignore stale recorder cleanup.
+        }
+
+        mediaRecorderRef.current = null;
+      }
+
+      recordingChunksRef.current = [];
+      recordingStartTimeRef.current = null;
+      stoppingRecordingRef.current = false;
+
+      stopMicrophoneDiagnostics();
+      stopMediaStream();
+
       if (
         typeof navigator === 'undefined' ||
         !navigator.mediaDevices?.getUserMedia
@@ -827,12 +973,6 @@ export default function MessageInput({
       let stream = null;
 
       try {
-        /*
-         * Keep the request deliberately simple.
-         *
-         * Some browsers/devices behave badly when several
-         * advanced audio constraints are forced.
-         */
         stream =
           await navigator.mediaDevices.getUserMedia(
             {
@@ -884,12 +1024,14 @@ export default function MessageInput({
           audioTrack.enabled = true;
         }
 
+        mediaStreamRef.current =
+          stream;
+
         /*
          * Start microphone diagnostics BEFORE
-         * MediaRecorder so we can determine whether
-         * actual microphone samples are arriving.
+         * MediaRecorder.
          */
-        startMicrophoneDiagnostics(
+        await startMicrophoneDiagnostics(
           stream
         );
 
@@ -927,9 +1069,6 @@ export default function MessageInput({
               recorder.state,
           }
         );
-
-        mediaStreamRef.current =
-          stream;
 
         mediaRecorderRef.current =
           recorder;
@@ -1054,8 +1193,8 @@ export default function MessageInput({
             );
 
             /*
-             * Save the diagnostic values before cleaning
-             * up the analyser.
+             * Save diagnostics BEFORE cleaning
+             * the analyser.
              */
             const microphonePeak =
               microphonePeakRef.current;
@@ -1063,9 +1202,10 @@ export default function MessageInput({
             const microphoneSamplesDetected =
               microphoneSamplesDetectedRef.current;
 
-            stopMicrophoneDiagnostics();
-            stopMediaStream();
-
+            /*
+             * Clear recording UI/timer immediately.
+             * The Blob is still safely held in `chunks`.
+             */
             if (
               recordingTimerRef.current
             ) {
@@ -1089,6 +1229,13 @@ export default function MessageInput({
             setIsRecording(false);
             setRecordingTime(0);
 
+            /*
+             * Stop microphone resources after the
+             * final MediaRecorder dataavailable event.
+             */
+            stopMicrophoneDiagnostics();
+            stopMediaStream();
+
             if (
               !chunks.length ||
               totalBytes === 0
@@ -1106,8 +1253,6 @@ export default function MessageInput({
             /*
              * If the microphone analyser saw absolutely
              * no signal, tell the user immediately.
-             *
-             * We use this only as a diagnostic guard.
              */
             if (
               !microphoneSamplesDetected
@@ -1137,12 +1282,12 @@ export default function MessageInput({
                 }
               );
 
+              recordingChunksRef.current =
+                [];
+
               setVoiceError(
                 'No microphone sound was detected. Check the selected microphone and browser permissions.'
               );
-
-              recordingChunksRef.current =
-                [];
 
               return;
             }
@@ -1351,6 +1496,14 @@ export default function MessageInput({
 
         stoppingRecordingRef.current =
           false;
+
+        if (recordingTimerRef.current) {
+          clearInterval(
+            recordingTimerRef.current
+          );
+
+          recordingTimerRef.current = null;
+        }
 
         setIsRecording(false);
         setRecordingTime(0);
