@@ -56,11 +56,10 @@ export function RoomProvider({
   const [participants, setParticipants] = useState([]);
   const [messages, setMessages] = useState([]);
   const [replyTo, setReplyTo] = useState(null);
-  const [uploadProgress, setUploadProgress] =
-    useState(null);
+  const [uploadProgress, setUploadProgress] = useState(null);
 
   /*
-   * Track whether the CURRENT USER intentionally
+   * Tracks whether the current user intentionally
    * destroyed the room.
    */
   const destroyingRoomRef = useRef(false);
@@ -88,10 +87,7 @@ export function RoomProvider({
     navigate('/', {
       replace: true,
     });
-  }, [
-    resetRoomState,
-    navigate,
-  ]);
+  }, [resetRoomState, navigate]);
 
   // --------------------------------------------------
   // Handle room closed externally
@@ -107,11 +103,7 @@ export function RoomProvider({
         replace: true,
       });
     }
-  }, [
-    resetRoomState,
-    onRoomClosed,
-    navigate,
-  ]);
+  }, [resetRoomState, onRoomClosed, navigate]);
 
   // --------------------------------------------------
   // Derive encryption key
@@ -135,7 +127,7 @@ export function RoomProvider({
       })
       .catch((error) => {
         console.error(
-          'Failed to derive room key:',
+          '[RoomContext] Failed to derive room key:',
           error
         );
 
@@ -181,6 +173,10 @@ export function RoomProvider({
     }
 
     const cleanup = onMessage((incoming) => {
+      if (!incoming) {
+        return;
+      }
+
       setMessages((previousMessages) => {
         /*
          * Prevent duplicate system messages.
@@ -193,8 +189,8 @@ export function RoomProvider({
             previousMessages.some(
               (message) =>
                 message.type === 'system' &&
-                message.content ===
-                  incoming.content
+                message.content === incoming.content &&
+                message.timestamp === incoming.timestamp
             );
 
           if (alreadyExists) {
@@ -202,60 +198,78 @@ export function RoomProvider({
           }
         }
 
-        // Get the ID of the message being replied to.
+        // ----------------------------------------------
+        // Resolve reply information
+        // ----------------------------------------------
+
         const replyToMessageId =
           incoming.replyToMessageId ??
           incoming.replyTo?.messageId ??
           incoming.replyTo?.id ??
           null;
 
-        // Find the original message.
         const originalMessage =
           replyToMessageId
             ? previousMessages.find(
                 (message) =>
-                  message.id ===
-                    replyToMessageId ||
-                  message.clientId ===
-                    replyToMessageId
+                  message.id === replyToMessageId ||
+                  message.clientId === replyToMessageId
               )
             : null;
 
-        // Create the updated incoming message.
         const updatedIncomingMessage = {
           ...incoming,
 
           replyTo: originalMessage
             ? {
-                messageId:
-                  originalMessage.id,
-                senderName:
-                  originalMessage.senderName,
-                content:
-                  originalMessage.content,
+                messageId: originalMessage.id,
+                senderName: originalMessage.senderName,
+                content: originalMessage.content,
               }
             : incoming.replyTo ?? null,
         };
 
-        // Prevent duplicate normal messages.
+        // ----------------------------------------------
+        // Prevent duplicate normal messages
+        // ----------------------------------------------
+
+        if (incoming.clientId) {
+          const existingMessage =
+            previousMessages.find(
+              (message) =>
+                message.clientId === incoming.clientId
+            );
+
+          if (existingMessage) {
+            return previousMessages.map(
+              (message) =>
+                message.clientId === incoming.clientId
+                  ? {
+                      ...message,
+                      ...updatedIncomingMessage,
+                    }
+                  : message
+            );
+          }
+        }
+
+        // ----------------------------------------------
+        // Prevent duplicate file messages
+        // ----------------------------------------------
+
         if (
-          incoming.clientId &&
-          previousMessages.some(
-            (message) =>
-              message.clientId ===
-              incoming.clientId
-          )
+          incoming.type === 'file' &&
+          incoming.id
         ) {
-          return previousMessages.map(
-            (message) =>
-              message.clientId ===
-              incoming.clientId
-                ? {
-                    ...message,
-                    ...updatedIncomingMessage,
-                  }
-                : message
-          );
+          const existingFile =
+            previousMessages.some(
+              (message) =>
+                message.id === incoming.id
+            );
+
+          if (existingFile) {
+            return previousMessages;
+          }
         }
 
         return [
@@ -278,7 +292,7 @@ export function RoomProvider({
     }
 
     // ------------------------------------------------
-    // A new user joined the room.
+    // A new user joined the room
     // ------------------------------------------------
 
     const offJoined = on(
@@ -293,8 +307,7 @@ export function RoomProvider({
             const alreadyExists =
               previousParticipants.some(
                 (item) =>
-                  item.id ===
-                  participant.id
+                  item.id === participant.id
               );
 
             if (alreadyExists) {
@@ -311,20 +324,19 @@ export function RoomProvider({
     );
 
     // ------------------------------------------------
-    // A user left the room.
+    // A user left the room
     // ------------------------------------------------
 
     const offLeft = on(
       'room:user-left',
       (payload = {}) => {
         /*
-         * SECURITY:
+         * IMPORTANT:
          *
-         * The backend sends the PUBLIC
-         * participantId as `id`.
+         * The backend sends the PUBLIC participantId
+         * as `id`.
          *
-         * sessionId is private and must NEVER
-         * be used as a public participant ID.
+         * Never use sessionId as a public participant ID.
          */
         const leavingId = payload.id;
 
@@ -338,36 +350,29 @@ export function RoomProvider({
         }
 
         /*
-         * Only update the participant roster here.
+         * The backend creates the authoritative
+         * system message.
          *
-         * IMPORTANT:
-         *
-         * Do NOT create a "left the room"
-         * system message here.
-         *
-         * The backend already creates the
-         * authoritative system message.
+         * Therefore we only update the roster here.
          */
         setParticipants(
           (previousParticipants) =>
             previousParticipants.filter(
               (participant) =>
-                participant.id !==
-                leavingId
+                participant.id !== leavingId
             )
         );
       }
     );
 
     // ------------------------------------------------
-    // A participant was removed by the host.
+    // Participant removed by host
     // ------------------------------------------------
 
     const offRemovedParticipant = on(
       'room:user-removed',
       (payload = {}) => {
-        const removedId =
-          payload.id;
+        const removedId = payload.id;
 
         if (!removedId) {
           console.warn(
@@ -378,27 +383,18 @@ export function RoomProvider({
           return;
         }
 
-        /*
-         * Only update the participant roster.
-         *
-         * The backend is responsible for creating
-         * and broadcasting:
-         *
-         * "Anonymous Cobra was removed from the room."
-         */
         setParticipants(
           (previousParticipants) =>
             previousParticipants.filter(
               (participant) =>
-                participant.id !==
-                removedId
+                participant.id !== removedId
             )
         );
       }
     );
 
     // ------------------------------------------------
-    // Room information updated.
+    // Room information updated
     // ------------------------------------------------
 
     const offRoomUpdate = on(
@@ -413,15 +409,14 @@ export function RoomProvider({
     );
 
     // ------------------------------------------------
-    // Successfully joined the room.
+    // Successfully joined room
     // ------------------------------------------------
 
     const offRoster = on(
       'room:joined',
       ({
         room: initialRoom,
-        participants:
-          initialParticipants,
+        participants: initialParticipants,
       } = {}) => {
         if (initialRoom) {
           setRoom(initialRoom);
@@ -436,7 +431,7 @@ export function RoomProvider({
     );
 
     // ------------------------------------------------
-    // A single message was deleted.
+    // Message deleted
     // ------------------------------------------------
 
     const offDeleted = on(
@@ -457,7 +452,7 @@ export function RoomProvider({
     );
 
     // ------------------------------------------------
-    // Messages cleared.
+    // Messages cleared
     // ------------------------------------------------
 
     const offCleared = on(
@@ -468,12 +463,16 @@ export function RoomProvider({
     );
 
     // ------------------------------------------------
-    // Room expired / destroyed.
+    // Room expired / destroyed
     // ------------------------------------------------
 
     const offExpired = on(
       'room:expired',
       () => {
+        /*
+         * If THIS USER intentionally destroyed
+         * the room, return directly to Home.
+         */
         if (destroyingRoomRef.current) {
           destroyingRoomRef.current = false;
 
@@ -487,7 +486,7 @@ export function RoomProvider({
     );
 
     // ------------------------------------------------
-    // Current user was removed by host.
+    // Current user removed by host
     // ------------------------------------------------
 
     const offRemoved = on(
@@ -519,22 +518,42 @@ export function RoomProvider({
   ]);
 
   // --------------------------------------------------
-  // Send message
+  // Send text message
   // --------------------------------------------------
 
   const sendMessage = useCallback(
     async (content) => {
+      if (!roomKey) {
+        throw new Error(
+          'Room encryption is not ready'
+        );
+      }
+
+      if (!sessionId || !sessionSecret) {
+        throw new Error(
+          'Session authentication is not ready'
+        );
+      }
+
+      const cleanContent =
+        typeof content === 'string'
+          ? content
+          : String(content ?? '');
+
+      if (!cleanContent.trim()) {
+        return;
+      }
+
       const clientId = await send(
-        content,
+        cleanContent,
         replyTo
       );
 
       /*
-       * SECURITY:
-       *
        * participantId is PUBLIC.
        *
-       * sessionId and sessionSecret are PRIVATE.
+       * sessionId/sessionSecret are PRIVATE and
+       * must never be used as senderId.
        */
       const currentParticipantId =
         participantId || null;
@@ -545,10 +564,9 @@ export function RoomProvider({
           id: clientId,
           clientId,
           type: 'text',
-          senderId:
-            currentParticipantId,
+          senderId: currentParticipantId,
           senderName: 'You',
-          content,
+          content: cleanContent,
 
           replyTo: replyTo
             ? {
@@ -568,6 +586,9 @@ export function RoomProvider({
       setReplyTo(null);
     },
     [
+      roomKey,
+      sessionId,
+      sessionSecret,
       send,
       replyTo,
       participantId,
@@ -580,6 +601,10 @@ export function RoomProvider({
 
   const deleteMessage = useCallback(
     (messageId) => {
+      if (!messageId) {
+        return;
+      }
+
       emitDeleteMessage(messageId);
 
       setMessages(
@@ -605,38 +630,58 @@ export function RoomProvider({
         );
       }
 
-      if (!sessionId) {
+      if (!sessionId || !sessionSecret) {
         throw new Error(
           'Session authentication is not ready'
         );
       }
 
-      if (!sessionSecret) {
+      if (!file) {
         throw new Error(
-          'Session authentication is not ready'
+          'File is missing'
         );
       }
 
       setUploadProgress({
-        fileName: file.name,
+        fileName:
+          file.name || 'File',
         percent: 0,
       });
 
       try {
-        await uploadFile({
-          roomId,
-          file,
-          key: roomKey,
-          sessionId,
-          sessionSecret,
+        /*
+         * uploadFile() encrypts the file locally before
+         * sending anything to the backend.
+         */
+        const result =
+          await uploadFile({
+            roomId,
+            file,
+            key: roomKey,
+            sessionId,
+            sessionSecret,
 
-          onProgress: (percent) => {
-            setUploadProgress({
-              fileName: file.name,
-              percent,
-            });
-          },
-        });
+            onProgress: (percent) => {
+              setUploadProgress({
+                fileName:
+                  file.name || 'File',
+                percent:
+                  Number.isFinite(
+                    Number(percent)
+                  )
+                    ? Math.min(
+                        100,
+                        Math.max(
+                          0,
+                          Number(percent)
+                        )
+                      )
+                    : 0,
+              });
+            },
+          });
+
+        return result;
       } finally {
         setUploadProgress(null);
       }
@@ -650,21 +695,116 @@ export function RoomProvider({
   );
 
   // --------------------------------------------------
+  // Send voice message
+  // --------------------------------------------------
+
+  const sendVoiceMessage = useCallback(
+    async (
+      audioBlob,
+      {
+        duration = 0,
+        mimeType,
+      } = {}
+    ) => {
+      if (!audioBlob) {
+        throw new Error(
+          'Voice recording is missing'
+        );
+      }
+
+      if (!(audioBlob instanceof Blob)) {
+        throw new Error(
+          'Voice recording is invalid'
+        );
+      }
+
+      if (audioBlob.size <= 0) {
+        throw new Error(
+          'Voice recording is empty'
+        );
+      }
+
+      /*
+       * Voice messages use the same encrypted file
+       * upload architecture as normal attachments.
+       *
+       * No plaintext audio is sent to the backend.
+       */
+      const actualMimeType =
+        mimeType ||
+        audioBlob.type ||
+        'audio/webm';
+
+      let extension = 'webm';
+
+      if (
+        actualMimeType
+          .toLowerCase()
+          .includes('ogg')
+      ) {
+        extension = 'ogg';
+      } else if (
+        actualMimeType
+          .toLowerCase()
+          .includes('mp4')
+      ) {
+        extension = 'm4a';
+      }
+
+      const timestamp = Date.now();
+
+      const audioFile = new File(
+        [audioBlob],
+        `voice-message-${timestamp}.${extension}`,
+        {
+          type: actualMimeType,
+          lastModified: timestamp,
+        }
+      );
+
+      const result =
+        await sendFile(audioFile);
+
+      /*
+       * The backend file message contains the encrypted
+       * audio metadata required by remote clients.
+       *
+       * Duration is retained locally in this return value.
+       */
+      const numericDuration =
+        Number(duration);
+
+      return {
+        ...result,
+        voice: true,
+        duration:
+          Number.isFinite(
+            numericDuration
+          )
+            ? Math.max(
+                0,
+                numericDuration
+              )
+            : 0,
+        mimeType: actualMimeType,
+      };
+    },
+    [sendFile]
+  );
+
+  // --------------------------------------------------
   // Leave room manually
   // --------------------------------------------------
 
   const handleLeaveRoom = useCallback(() => {
     /*
-     * This is an intentional leave.
-     *
-     * Emit room:leave before leaving the page.
+     * Explicitly tell the backend that this user
+     * is leaving before navigating away.
      */
     emitLeaveRoom();
 
     leaveRoomAndGoHome();
-  }, [
-    leaveRoomAndGoHome,
-  ]);
+  }, [leaveRoomAndGoHome]);
 
   // --------------------------------------------------
   // Room controls
@@ -711,7 +851,7 @@ export function RoomProvider({
   const handleSetAcceptingNewMembers =
     useCallback((enabled) => {
       emitSetAcceptingNewMembers(
-        enabled
+        Boolean(enabled)
       );
     }, []);
 
@@ -722,7 +862,7 @@ export function RoomProvider({
   const handleSetFileSharingEnabled =
     useCallback((enabled) => {
       emitSetFileSharingEnabled(
-        enabled
+        Boolean(enabled)
       );
     }, []);
 
@@ -732,8 +872,18 @@ export function RoomProvider({
 
   const handleSetMaxParticipants =
     useCallback((maxParticipants) => {
+      const numericValue =
+        Number(maxParticipants);
+
+      if (
+        !Number.isFinite(numericValue) ||
+        numericValue <= 0
+      ) {
+        return;
+      }
+
       emitSetMaxParticipants(
-        maxParticipants
+        numericValue
       );
     }, []);
 
@@ -743,7 +893,21 @@ export function RoomProvider({
 
   const handleExtendExpiration =
     useCallback((minutes) => {
-      emitExtendExpiration(minutes);
+      const numericMinutes =
+        Number(minutes);
+
+      if (
+        !Number.isFinite(
+          numericMinutes
+        ) ||
+        numericMinutes <= 0
+      ) {
+        return;
+      }
+
+      emitExtendExpiration(
+        numericMinutes
+      );
     }, []);
 
   // --------------------------------------------------
@@ -751,17 +915,24 @@ export function RoomProvider({
   // --------------------------------------------------
 
   const handleRemoveParticipant =
-    useCallback((targetParticipantId) => {
-      /*
-       * targetParticipantId is PUBLIC.
-       *
-       * Never send another participant's
-       * sessionId to the socket service.
-       */
-      emitRemoveParticipant(
-        targetParticipantId
-      );
-    }, []);
+    useCallback(
+      (targetParticipantId) => {
+        /*
+         * targetParticipantId is PUBLIC.
+         *
+         * Never send another participant's
+         * sessionId.
+         */
+        if (!targetParticipantId) {
+          return;
+        }
+
+        emitRemoveParticipant(
+          targetParticipantId
+        );
+      },
+      []
+    );
 
   // --------------------------------------------------
   // Clear messages
@@ -773,12 +944,12 @@ export function RoomProvider({
     }, []);
 
   // --------------------------------------------------
-  // Context value
+  // Current participant
   // --------------------------------------------------
 
   /*
-   * Find the current user by their PUBLIC
-   * participantId, never by isOwner.
+   * Find the current user using PUBLIC
+   * participantId only.
    */
   const currentParticipant =
     participantId
@@ -789,8 +960,15 @@ export function RoomProvider({
         ) || null
       : null;
 
+  // --------------------------------------------------
+  // Context value
+  // --------------------------------------------------
+
   const value = {
+    // ----------------------------------------------
     // Room identity
+    // ----------------------------------------------
+
     roomId,
 
     // PRIVATE
@@ -805,44 +983,69 @@ export function RoomProvider({
       currentParticipant?.id ||
       null,
 
+    // ----------------------------------------------
     // Encryption
+    // ----------------------------------------------
+
     roomKey,
 
+    // ----------------------------------------------
     // Room state
+    // ----------------------------------------------
+
     room,
     participants,
     messages,
 
+    // ----------------------------------------------
     // Connection
+    // ----------------------------------------------
+
     typingUsers,
     connectionState,
     retryConnection,
 
+    // ----------------------------------------------
     // Replies
+    // ----------------------------------------------
+
     replyTo,
     setReplyTo,
 
+    // ----------------------------------------------
     // Messages
+    // ----------------------------------------------
+
     sendMessage,
     deleteMessage,
 
-    // Files
+    // ----------------------------------------------
+    // Files / Voice
+    // ----------------------------------------------
+
     sendFile,
+    sendVoiceMessage,
     uploadProgress,
 
+    // ----------------------------------------------
     // Typing
+    // ----------------------------------------------
+
     startTyping,
     stopTyping,
 
+    // ----------------------------------------------
     // Ownership
+    // ----------------------------------------------
+
     isOwner,
 
+    // ----------------------------------------------
     // Room controls
-    lockRoom:
-      handleLockRoom,
+    // ----------------------------------------------
 
-    unlockRoom:
-      handleUnlockRoom,
+    lockRoom: handleLockRoom,
+    unlockRoom: handleUnlockRoom,
 
     setAcceptingNewMembers:
       handleSetAcceptingNewMembers,
@@ -865,23 +1068,26 @@ export function RoomProvider({
     clearMessages:
       handleClearMessages,
 
+    // ----------------------------------------------
     // Leave
+    // ----------------------------------------------
+
     leaveRoom:
       handleLeaveRoom,
 
+    // ----------------------------------------------
     // Ready
-    ready:
-      Boolean(
-        roomKey &&
-        sessionId &&
-        sessionSecret
-      ),
+    // ----------------------------------------------
+
+    ready: Boolean(
+      roomKey &&
+      sessionId &&
+      sessionSecret
+    ),
   };
 
   return (
-    <RoomContext.Provider
-      value={value}
-    >
+    <RoomContext.Provider value={value}>
       {children}
     </RoomContext.Provider>
   );

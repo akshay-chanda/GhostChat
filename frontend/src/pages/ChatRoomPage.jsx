@@ -219,6 +219,7 @@ function ChatRoomLayout({
     deleteMessage,
 
     sendFile,
+    sendVoiceMessage,
     uploadProgress,
 
     startTyping,
@@ -241,6 +242,7 @@ function ChatRoomLayout({
     leaveRoom,
 
     ready,
+
   } = useRoom();
 
   const [settingsOpen, setSettingsOpen] =
@@ -979,6 +981,7 @@ function ChatRoomLayout({
           >
             <MessageInput
               onSend={sendMessage}
+              onSendVoiceMessage={sendVoiceMessage}
               onTypingStart={startTyping}
               onTypingStop={stopTyping}
               onAttachFile={handleAttachFile}

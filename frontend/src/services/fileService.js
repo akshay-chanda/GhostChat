@@ -8,7 +8,7 @@ import {
 /**
  * Convert a backend download URL into an absolute URL.
  *
- * Supports both:
+ * Supports:
  *
  * 1. Absolute API base:
  *    https://ghostchat-backend-redk.onrender.com/api
@@ -23,7 +23,6 @@ function getAbsoluteDownloadUrl(downloadUrl) {
     );
   }
 
-  // Already an absolute URL.
   if (
     downloadUrl.startsWith('http://') ||
     downloadUrl.startsWith('https://')
@@ -31,17 +30,11 @@ function getAbsoluteDownloadUrl(downloadUrl) {
     return downloadUrl;
   }
 
-  /*
-   * Resolve the configured API base safely.
-   */
   const apiBaseUrl = new URL(
     API_BASE_URL,
     window.location.origin
   );
 
-  /*
-   * Backend returned an absolute path.
-   */
   if (downloadUrl.startsWith('/')) {
     return new URL(
       downloadUrl,
@@ -49,9 +42,6 @@ function getAbsoluteDownloadUrl(downloadUrl) {
     ).toString();
   }
 
-  /*
-   * Backend returned a relative path.
-   */
   return new URL(
     downloadUrl,
     `${apiBaseUrl.toString().replace(/\/$/, '')}/`
@@ -59,9 +49,33 @@ function getAbsoluteDownloadUrl(downloadUrl) {
 }
 
 /**
+ * Normalize MIME types.
+ *
+ * Browser MediaRecorder can sometimes produce:
+ *
+ *   audio/webm;codecs=opus
+ *   audio/ogg;codecs=opus
+ *
+ * For the decrypted Blob we only need the base MIME type.
+ */
+function normalizeMimeType(mimeType) {
+  if (
+    typeof mimeType !== 'string' ||
+    !mimeType.trim()
+  ) {
+    return 'application/octet-stream';
+  }
+
+  return mimeType
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+}
+
+/**
  * Upload an encrypted file.
  *
- * Authentication uses private HTTP headers:
+ * Authentication uses:
  *
  *   X-Session-Id
  *   X-Session-Secret
@@ -97,7 +111,18 @@ export function uploadFile({
           );
         }
 
-        // Encrypt the file before sending it.
+        /*
+         * Preserve the original MIME type before
+         * encryption.
+         */
+        const originalMimeType =
+          normalizeMimeType(
+            file.type
+          );
+
+        /*
+         * Encrypt the original file locally.
+         */
         const {
           encryptedBlob,
           iv,
@@ -106,9 +131,28 @@ export function uploadFile({
           key
         );
 
+        if (
+          !(encryptedBlob instanceof Blob)
+        ) {
+          throw new Error(
+            'File encryption did not return a valid Blob'
+          );
+        }
+
+        if (
+          encryptedBlob.size === 0
+        ) {
+          throw new Error(
+            'Encrypted file is empty'
+          );
+        }
+
         const formData =
           new FormData();
 
+        /*
+         * The backend stores encrypted bytes.
+         */
         formData.append(
           'file',
           encryptedBlob,
@@ -120,16 +164,29 @@ export function uploadFile({
           iv
         );
 
+        /*
+         * Keep the original filename.
+         */
         formData.append(
           'originalName',
           file.name
         );
 
+        /*
+         * IMPORTANT:
+         *
+         * Send the original MIME type,
+         * not the encrypted Blob MIME type.
+         */
         formData.append(
           'mimeType',
-          file.type
+          originalMimeType
         );
 
+        /*
+         * This is the original plaintext
+         * file size.
+         */
         formData.append(
           'size',
           String(file.size)
@@ -146,16 +203,10 @@ export function uploadFile({
         );
 
         /*
-         * IMPORTANT:
+         * Authentication is header-only.
          *
-         * Do NOT use:
-         *
-         *   xhr.withCredentials = true
-         *
-         * Authentication is handled entirely through
-         * X-Session-Id and X-Session-Secret.
+         * Do NOT enable credentials/cookies.
          */
-
         if (sessionId) {
           xhr.setRequestHeader(
             'X-Session-Id',
@@ -189,11 +240,35 @@ export function uploadFile({
             xhr.status < 300
           ) {
             try {
-              resolve(
+              const response =
                 JSON.parse(
                   xhr.responseText
+                );
+
+              /*
+               * Helpful diagnostics for voice
+               * messages during development.
+               */
+              if (
+                originalMimeType.startsWith(
+                  'audio/'
                 )
-              );
+              ) {
+                console.log(
+                  'Voice upload completed:',
+                  {
+                    name: file.name,
+                    mimeType:
+                      originalMimeType,
+                    originalSize:
+                      file.size,
+                    encryptedSize:
+                      encryptedBlob.size,
+                  }
+                );
+              }
+
+              resolve(response);
             } catch {
               reject(
                 new Error(
@@ -336,8 +411,8 @@ export async function downloadAndDecryptFile({
   }
 
   /*
-   * The backend returns encrypted
-   * ciphertext as raw binary.
+   * Backend returns encrypted ciphertext
+   * as raw binary.
    */
   const encryptedBlob =
     await response.blob();
@@ -359,19 +434,23 @@ export async function downloadAndDecryptFile({
   }
 
   /*
-   * Decrypt using the same:
-   *
-   * - room key
-   * - IV
-   *
-   * that were used during upload.
+   * Normalize the original MIME type before
+   * passing it to the decryption layer.
+   */
+  const normalizedMimeType =
+    normalizeMimeType(
+      mimeType
+    );
+
+  /*
+   * Decrypt locally.
    */
   const decryptedBlob =
     await decryptFile(
       encryptedBlob,
       iv,
       key,
-      mimeType
+      normalizedMimeType
     );
 
   if (
@@ -390,7 +469,63 @@ export async function downloadAndDecryptFile({
     );
   }
 
-  return decryptedBlob;
+  /*
+   * IMPORTANT FOR VOICE:
+   *
+   * Explicitly restore the original audio MIME
+   * type on the resulting Blob.
+   *
+   * This makes the Blob suitable for:
+   *
+   *   URL.createObjectURL(blob)
+   *
+   * and:
+   *
+   *   <audio src="...">
+   */
+  const finalBlob =
+    new Blob(
+      [decryptedBlob],
+      {
+        type:
+          normalizedMimeType,
+      }
+    );
+
+  if (
+    finalBlob.size === 0
+  ) {
+    throw new Error(
+      'Final decrypted file is empty'
+    );
+  }
+
+  /*
+   * Helpful diagnostics for audio playback.
+   */
+  if (
+    normalizedMimeType.startsWith(
+      'audio/'
+    )
+  ) {
+    console.log(
+      'Voice download/decryption completed:',
+      {
+        mimeType:
+          normalizedMimeType,
+        encryptedSize:
+          encryptedBlob.size,
+        decryptedSize:
+          decryptedBlob.size,
+        finalSize:
+          finalBlob.size,
+        url:
+          absoluteDownloadUrl,
+      }
+    );
+  }
+
+  return finalBlob;
 }
 
 /**

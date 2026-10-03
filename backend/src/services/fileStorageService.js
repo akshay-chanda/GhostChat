@@ -30,6 +30,20 @@ const STORAGE_DIR =
     env.FILE_STORAGE_PATH
   );
 
+/*
+ * Voice-message formats supported by the frontend
+ * MediaRecorder implementation.
+ *
+ * These are added here so voice messages continue to
+ * work even when the normal file allowlist does not
+ * contain audio extensions.
+ */
+const ALLOWED_VOICE_EXTENSIONS = [
+  '.webm',
+  '.ogg',
+  '.m4a',
+];
+
 function invalidFileError(
   message
 ) {
@@ -118,6 +132,14 @@ async function saveEncryptedFile({
     throw tooLargeError();
   }
 
+  /*
+   * declaredSize is the ORIGINAL file size.
+   *
+   * The uploaded buffer is encrypted ciphertext and may
+   * be slightly larger because of encryption overhead.
+   *
+   * Keep the existing 1KB tolerance.
+   */
   if (
     Number.isFinite(
       declaredSize
@@ -143,6 +165,11 @@ async function saveEncryptedFile({
       safeName
     );
 
+  /*
+   * Block dangerous extensions first.
+   *
+   * This remains enforced even for voice files.
+   */
   if (
     BLOCKED_FILE_EXTENSIONS.includes(
       ext
@@ -153,11 +180,28 @@ async function saveEncryptedFile({
     );
   }
 
-  if (
-    ALLOWED_FILE_EXTENSIONS.length &&
-    !ALLOWED_FILE_EXTENSIONS.includes(
+  /*
+   * Voice files are intentionally allowed even if the
+   * general ALLOWED_FILE_EXTENSIONS list does not contain
+   * audio formats.
+   *
+   * All other files must still pass the existing allowlist.
+   */
+  const isVoiceFile =
+    ALLOWED_VOICE_EXTENSIONS.includes(
       ext
-    )
+    );
+
+  const isAllowedRegularFile =
+    ALLOWED_FILE_EXTENSIONS.length
+      ? ALLOWED_FILE_EXTENSIONS.includes(
+          ext
+        )
+      : true;
+
+  if (
+    !isVoiceFile &&
+    !isAllowedRegularFile
   ) {
     throw invalidFileError(
       'This file type isn’t allowed.'
