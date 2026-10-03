@@ -4,27 +4,59 @@
 // difficult to accidentally log passwords, message content,
 // or encryption keys.
 
-const FORBIDDEN_KEYS = [
-  'password',
-  'ciphertext',
-  'iv',
-  'content',
-  'roomKey',
-  'encryptionKey',
-  'plaintext',
+const FORBIDDEN_KEY_PATTERNS = [
+  /pass(word)?/i,
+  /cipher.*text/i,
+  /^iv$/i,
+  /content/i,
+  /room.*key/i,
+  /encryption.*key/i,
+  /plain.*text/i,
 ];
+
+function isForbiddenKey(key) {
+  if (typeof key !== 'string') {
+    return false;
+  }
+
+  return FORBIDDEN_KEY_PATTERNS.some(
+    (pattern) =>
+      pattern.test(key)
+  );
+}
 
 function redact(meta) {
   if (!meta || typeof meta !== 'object') {
     return meta;
   }
 
+  /*
+   * Handle arrays recursively so sensitive values
+   * cannot appear inside nested structures.
+   */
+  if (Array.isArray(meta)) {
+    return meta.map((value) =>
+      redact(value)
+    );
+  }
+
   const clean = {};
 
   for (const [key, value] of Object.entries(meta)) {
-    clean[key] = FORBIDDEN_KEYS.includes(key)
-      ? '[redacted]'
-      : value;
+    if (isForbiddenKey(key)) {
+      clean[key] = '[redacted]';
+      continue;
+    }
+
+    if (
+      value &&
+      typeof value === 'object'
+    ) {
+      clean[key] = redact(value);
+      continue;
+    }
+
+    clean[key] = value;
   }
 
   return clean;
@@ -52,19 +84,28 @@ function normalizeMeta(meta) {
   return redact(meta);
 }
 
-function log(level, message, meta) {
-  const normalizedMeta = normalizeMeta(meta);
+function log(
+  level,
+  message,
+  meta
+) {
+  const normalizedMeta =
+    normalizeMeta(meta);
 
   const entry = {
     level,
     message,
     ...(normalizedMeta !== undefined
-      ? { meta: normalizedMeta }
+      ? {
+          meta: normalizedMeta,
+        }
       : {}),
-    timestamp: new Date().toISOString(),
+    timestamp:
+      new Date().toISOString(),
   };
 
-  const line = JSON.stringify(entry);
+  const line =
+    JSON.stringify(entry);
 
   if (level === 'error') {
     console.error(line);
@@ -77,11 +118,23 @@ function log(level, message, meta) {
 
 module.exports = {
   info: (message, meta) =>
-    log('info', message, meta),
+    log(
+      'info',
+      message,
+      meta
+    ),
 
   warn: (message, meta) =>
-    log('warn', message, meta),
+    log(
+      'warn',
+      message,
+      meta
+    ),
 
   error: (message, meta) =>
-    log('error', message, meta),
+    log(
+      'error',
+      message,
+      meta
+    ),
 };
