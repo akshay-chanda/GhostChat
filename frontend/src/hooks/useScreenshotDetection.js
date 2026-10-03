@@ -1,31 +1,61 @@
-import { useState, useEffect, useCallback } from 'react';
+import {
+  useEffect,
+  useCallback,
+} from 'react';
 
 /**
- * Best-effort only. This can catch a few common signals on some
- * platforms — the PrintScreen key on Windows, a tab losing visibility
- * right as a capture shortcut fires — but it CANNOT reliably detect
- * macOS/iOS/Android capture, external cameras, or most OS-level
- * screen-recording tools. Treat a `false` result as "nothing
- * detected," never as "nothing happened." This is the deterrence
- * layer described in SecurityModal's "Not covered" list, not an
- * actual prevention mechanism.
+ * Best-effort screenshot detection.
+ *
+ * IMPORTANT:
+ * A normal website cannot reliably detect every screenshot.
+ *
+ * This hook currently detects browser-visible signals such as:
+ * - PrintScreen on supported browsers/platforms
+ *
+ * When a signal is detected, the supplied callback is called.
+ *
+ * The callback is responsible for notifying the room/backend.
+ *
+ * The person taking the screenshot is NOT shown
+ * any local notification by this hook.
  */
-export function useScreenshotDetection() {
-  const [detected, setDetected] = useState(false);
-
-  const dismiss = useCallback(() => setDetected(false), []);
+export function useScreenshotDetection(
+  onScreenshotDetected
+) {
+  const handleDetected = useCallback(() => {
+    /*
+     * Notify the caller so the screenshot event
+     * can be sent to the room through Socket.IO.
+     */
+    if (
+      typeof onScreenshotDetected ===
+      'function'
+    ) {
+      onScreenshotDetected();
+    }
+  }, [onScreenshotDetected]);
 
   useEffect(() => {
-    const handleKeyDown = (e) => {
-      // PrintScreen fires as its own key on most Windows browsers.
-      if (e.key === 'PrintScreen') {
-        setDetected(true);
+    const handleKeyUp = (event) => {
+      /*
+       * PrintScreen is exposed as its own key
+       * by most supported Windows browsers.
+       */
+      if (event.key === 'PrintScreen') {
+        handleDetected();
       }
     };
 
-    window.addEventListener('keyup', handleKeyDown);
-    return () => window.removeEventListener('keyup', handleKeyDown);
-  }, []);
+    window.addEventListener(
+      'keyup',
+      handleKeyUp
+    );
 
-  return { detected, dismiss };
+    return () => {
+      window.removeEventListener(
+        'keyup',
+        handleKeyUp
+      );
+    };
+  }, [handleDetected]);
 }

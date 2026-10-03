@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 const roomManager = require('../services/roomManager');
 const sessionManager = require('../services/sessionManager');
 const fileStorageService = require('../services/fileStorageService');
@@ -20,6 +22,12 @@ const logger = require('../utils/logger');
  * Those actions remain immediate.
  */
 const RECONNECT_GRACE_MS = 5000;
+
+/*
+ * Prevent a single client from flooding the room with
+ * screenshot notifications.
+ */
+const SCREENSHOT_NOTIFICATION_COOLDOWN_MS = 1500;
 
 /*
  * Pending disconnect cleanup timers.
@@ -318,10 +326,6 @@ function emitError(
 /**
  * Mark every socket belonging to a room
  * as already destroyed.
- *
- * This prevents duplicate cleanup when the
- * owner destroys the room and Socket.IO
- * disconnects all other users.
  */
 function markRoomAsDestroyed(
   io,
@@ -344,12 +348,6 @@ function markRoomAsDestroyed(
 /**
  * Find a socket by room ID and PRIVATE
  * session ID.
- *
- * sessionId is only used internally
- * by the server.
- *
- * It must NEVER be sent to another
- * participant.
  */
 function findParticipantSocket(
   io,
@@ -560,24 +558,141 @@ function registerRoomEvents(
   );
 
   /**
+   * Screenshot detection.
+   *
+   * The browser sends ONLY:
+   *
+   *   screenshot:detected
+   *
+   * The backend NEVER trusts a participant ID or
+   * anonymous name supplied by the browser.
+   *
+   * Instead, identity comes from the already
+   * authenticated Socket.IO connection:
+   *
+   *   socket.data.participantId
+   *   socket.data.anonymousName
+   *
+   * This event is best-effort because a normal website
+   * cannot reliably detect every OS-level screenshot.
+   *
+   * The event is NOT stored as a normal chat message.
+   * It is an ephemeral room notification.
+   */
+  socket.on(
+    'screenshot:detected',
+    () => {
+      try {
+        /*
+         * Ignore events from a socket whose room has
+         * already been destroyed.
+         */
+        if (
+          socket.data.roomAlreadyDestroyed
+        ) {
+          return;
+        }
+
+        /*
+         * Make sure the socket still belongs to
+         * an authenticated participant.
+         */
+        if (
+          !socket.data.participantId ||
+          !socket.data.anonymousName
+        ) {
+          logger.warn(
+            'Screenshot notification rejected - participant identity is missing',
+            {
+              roomId,
+            }
+          );
+
+          return;
+        }
+
+        /*
+         * Basic anti-spam cooldown.
+         *
+         * A malicious client could otherwise emit this
+         * event hundreds of times manually.
+         */
+        const now =
+          Date.now();
+
+        const lastScreenshotAt =
+          socket.data.lastScreenshotAt || 0;
+
+        if (
+          now -
+            lastScreenshotAt <
+          SCREENSHOT_NOTIFICATION_COOLDOWN_MS
+        ) {
+          return;
+        }
+
+        socket.data.lastScreenshotAt =
+          now;
+
+        const timestamp =
+          new Date().toISOString();
+
+        const eventId =
+          crypto.randomUUID();
+
+        /*
+         * Broadcast to EVERY participant.
+         *
+         * The frontend ignores the event for the
+         * participant who triggered it.
+         *
+         * Therefore:
+         *
+         *   A -> sees nothing
+         *   B/C -> see "A took a screenshot."
+         *
+         * Only public participant information
+         * is included.
+         */
+        io.to(roomId).emit(
+          'screenshot:detected',
+          {
+            eventId,
+            participantId:
+              socket.data.participantId,
+            anonymousName:
+              socket.data.anonymousName,
+            timestamp,
+          }
+        );
+
+        logger.info(
+          'Screenshot notification broadcast',
+          {
+            roomId,
+            participantId:
+              socket.data.participantId,
+          }
+        );
+      } catch (error) {
+        logger.warn(
+          'Failed to process screenshot notification',
+          {
+            roomId,
+            error:
+              error.message,
+          }
+        );
+      }
+    }
+  );
+
+  /**
    * Delete a message.
    *
    * This handles BOTH:
    *   - normal text messages
    *   - file/voice messages
-   *
-   * The sender can delete only their own message.
-   *
-   * For file/voice messages:
-   *   1. The encrypted file is removed from storage.
-   *   2. The file metadata is removed.
-   *   3. The message is removed from the room.
-   *
-   * Finally:
-   *   message:delete is broadcast to EVERY participant.
-   *
-   * IMPORTANT:
-   * The client sends only the message ID.
    */
   socket.on(
     'message:delete',
@@ -591,10 +706,6 @@ function registerRoomEvents(
           );
         }
 
-        /*
-         * Make sure the message actually belongs
-         * to this room.
-         */
         const message =
           store.getMessage(
             roomId,
@@ -607,13 +718,6 @@ function registerRoomEvents(
           );
         }
 
-        /*
-         * Only the original sender may delete
-         * their own message.
-         *
-         * Messages use the PUBLIC participantId
-         * as senderId.
-         */
         if (
           message.senderId !==
           socket.data.participantId
@@ -623,16 +727,6 @@ function registerRoomEvents(
           );
         }
 
-        /*
-         * File and voice messages both use
-         * message.type === "file".
-         *
-         * Delete the encrypted file from disk
-         * before removing the message.
-         *
-         * deleteFile() also verifies the uploader
-         * session internally.
-         */
         if (
           message.type === 'file' &&
           message.file &&
@@ -647,11 +741,6 @@ function registerRoomEvents(
               )
             );
 
-          /*
-           * If the file metadata exists but the
-           * requester is not allowed to delete it,
-           * fail the entire message deletion.
-           */
           if (!deleted) {
             throw new Error(
               'You are not allowed to delete this file.'
@@ -659,10 +748,6 @@ function registerRoomEvents(
           }
         }
 
-        /*
-         * Remove the message from the in-memory
-         * room message buffer.
-         */
         const removed =
           store.removeMessage(
             roomId,
@@ -675,16 +760,6 @@ function registerRoomEvents(
           );
         }
 
-        /*
-         * IMPORTANT:
-         *
-         * Use io.to(roomId), NOT socket.emit()
-         * or socket.to(roomId).
-         *
-         * This sends the deletion event to:
-         *   - the sender
-         *   - every other participant
-         */
         io.to(roomId).emit(
           'message:delete',
           {
@@ -726,12 +801,6 @@ function registerRoomEvents(
 
   /**
    * Remove a participant.
-   *
-   * Frontend sends PUBLIC participantId.
-   *
-   * Backend resolves the participant's
-   * PRIVATE sessionId and sessionSecret
-   * internally.
    */
   socket.on(
     'room:remove-participant',
@@ -783,10 +852,6 @@ function registerRoomEvents(
           );
         }
 
-        /*
-         * Find the target socket BEFORE removing
-         * the participant from the store.
-         */
         const targetSocket =
           findParticipantSocket(
             io,
@@ -794,14 +859,6 @@ function registerRoomEvents(
             targetSessionId
           );
 
-        /*
-         * Mark the socket BEFORE removing
-         * the participant.
-         *
-         * This prevents the target socket's
-         * disconnect event from generating a
-         * normal "left the room" event.
-         */
         if (targetSocket) {
           targetSocket.data.suppressLeaveEvent =
             true;
@@ -810,13 +867,6 @@ function registerRoomEvents(
             true;
         }
 
-        /*
-         * Explicit removal is immediate.
-         *
-         * Cancel any pending reconnect cleanup
-         * because the owner intentionally removed
-         * this participant.
-         */
         cancelPendingDisconnect(
           roomId,
           targetSessionId
@@ -828,18 +878,6 @@ function registerRoomEvents(
           targetParticipantId
         );
 
-        /*
-         * IMPORTANT:
-         *
-         * This is intentionally NOT room:user-left.
-         *
-         * room:user-left means the participant
-         * voluntarily left or disappeared after
-         * the reconnect grace period.
-         *
-         * room:user-removed means the owner
-         * explicitly removed the participant.
-         */
         io.to(roomId).emit(
           'room:user-removed',
           {
@@ -848,9 +886,6 @@ function registerRoomEvents(
           }
         );
 
-        /*
-         * Create ONLY the removal message.
-         */
         const removedNotice =
           createSystemMessage(
             `${targetParticipant.anonymousName} was removed from the room.`
@@ -866,10 +901,6 @@ function registerRoomEvents(
           removedNotice
         );
 
-        /*
-         * Notify the removed participant and
-         * disconnect their socket.
-         */
         if (targetSocket) {
           targetSocket.emit(
             'room:removed'
@@ -890,11 +921,6 @@ function registerRoomEvents(
 
   /**
    * Explicitly destroy room.
-   *
-   * Only the owner can do this.
-   *
-   * This is IMMEDIATE and does not use
-   * the reconnect grace period.
    */
   socket.on(
     'room:destroy',
@@ -936,10 +962,6 @@ function registerRoomEvents(
           return;
         }
 
-        /*
-         * Explicit destruction cancels any
-         * pending reconnect cleanup.
-         */
         cancelPendingDisconnect(
           roomId,
           sessionId
@@ -1046,14 +1068,6 @@ function registerRoomEvents(
 
   /**
    * Explicit leave room.
-   *
-   * This is IMMEDIATE.
-   *
-   * Owner:
-   *   destroys the entire room.
-   *
-   * Participant:
-   *   leaves only themselves.
    */
   socket.on(
     'room:leave',
@@ -1068,19 +1082,11 @@ function registerRoomEvents(
         socket.data.intentionalLeave =
           true;
 
-        /*
-         * Explicit leave must cancel any
-         * pending disconnect cleanup.
-         */
         cancelPendingDisconnect(
           roomId,
           sessionId
         );
 
-        /*
-         * Owner explicitly leaving:
-         * destroy the entire room.
-         */
         if (socket.data.isOwner) {
           roomManager.destroyRoom(
             roomId,
@@ -1111,9 +1117,6 @@ function registerRoomEvents(
           return;
         }
 
-        /*
-         * Normal participant explicitly leaves.
-         */
         sessionManager.destroySession(
           roomId,
           sessionId,
@@ -1169,19 +1172,6 @@ function registerRoomEvents(
 
   /**
    * Handle socket disconnect.
-   *
-   * IMPORTANT:
-   *
-   * We do NOT immediately destroy the session.
-   *
-   * A browser reload temporarily disconnects the
-   * old socket before creating the new one.
-   *
-   * Instead we schedule cleanup and allow the same
-   * authenticated session to reconnect.
-   *
-   * Explicit room:leave, room:destroy and participant
-   * removal remain immediate.
    */
   socket.on(
     'disconnect',
@@ -1197,34 +1187,18 @@ function registerRoomEvents(
         }
       );
 
-      /*
-       * Room was already explicitly destroyed.
-       */
       if (
         socket.data.roomAlreadyDestroyed
       ) {
         return;
       }
 
-      /*
-       * User explicitly left.
-       *
-       * room:leave already performed
-       * the required cleanup.
-       */
       if (
         socket.data.intentionalLeave
       ) {
         return;
       }
 
-      /*
-       * Participant was explicitly removed.
-       *
-       * room:remove-participant already
-       * performed the cleanup and already
-       * emitted the "was removed" message.
-       */
       if (
         socket.data.suppressLeaveEvent ||
         socket.data.intentionalRemoval
@@ -1232,17 +1206,6 @@ function registerRoomEvents(
         return;
       }
 
-      /*
-       * Schedule temporary disconnect handling.
-       *
-       * If the browser reloads, the new socket
-       * will authenticate with the same credentials
-       * and cancel this timer.
-       *
-       * If the user really closed the browser/tab
-       * and does not return, cleanup happens after
-       * RECONNECT_GRACE_MS.
-       */
       scheduleDisconnectCleanup(
         io,
         socket

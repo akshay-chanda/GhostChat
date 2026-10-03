@@ -31,19 +31,6 @@ function clearInitialConnectTimer() {
 
 /**
  * Schedule the first socket connection.
- *
- * This gives React time to finish registering:
- *
- * - room:joined
- * - room:user-joined
- * - room:user-left
- * - room:updated
- * - message:new
- * - room:expired
- * - room:removed
- *
- * After the first connection, Socket.IO handles all
- * reconnections normally.
  */
 function scheduleInitialConnection(targetSocket) {
   clearInitialConnectTimer();
@@ -51,9 +38,6 @@ function scheduleInitialConnection(targetSocket) {
   initialConnectTimer = setTimeout(() => {
     initialConnectTimer = null;
 
-    /*
-     * Make sure this is still the active socket.
-     */
     if (
       socket !== targetSocket ||
       !targetSocket
@@ -61,10 +45,6 @@ function scheduleInitialConnection(targetSocket) {
       return;
     }
 
-    /*
-     * Do not connect if it is already connected
-     * or Socket.IO is already attempting a connection.
-     */
     if (
       targetSocket.connected ||
       targetSocket.active
@@ -97,13 +77,6 @@ export function connectSocket({
   sessionSecret,
   key,
 }) {
-  /*
-   * Reuse the existing socket when this is the same
-   * room/session/credential combination.
-   *
-   * This is important when the mobile browser comes back from
-   * a file picker, file viewer, or another application.
-   */
   if (
     socket &&
     currentParams?.roomId === roomId &&
@@ -112,29 +85,16 @@ export function connectSocket({
   ) {
     roomKey = key;
 
-    /*
-     * If the socket exists but is currently disconnected,
-     * allow the normal reconnect flow to continue.
-     */
     if (
       !socket.connected &&
       !socket.active
     ) {
-      /*
-       * Schedule rather than immediately connecting.
-       *
-       * This is especially important during the initial
-       * React render/effect cycle.
-       */
       scheduleInitialConnection(socket);
     }
 
     return socket;
   }
 
-  /*
-   * Close any previous socket.
-   */
   clearInitialConnectTimer();
 
   if (socket) {
@@ -150,14 +110,6 @@ export function connectSocket({
     sessionSecret,
   };
 
-  /*
-   * SECURITY:
-   *
-   * Both private authentication credentials are required.
-   *
-   * The backend will reject the connection if either
-   * sessionId or sessionSecret is missing/incorrect.
-   */
   socket = io(SOCKET_URL, {
     auth: {
       roomId,
@@ -165,57 +117,24 @@ export function connectSocket({
       sessionSecret,
     },
 
-    /*
-     * WebSocket only, matching the backend configuration.
-     */
     transports: ['websocket'],
 
-    /*
-     * Enable Socket.IO automatic reconnection.
-     */
     reconnection: true,
 
-    /*
-     * Keep trying because mobile browsers can remain
-     * in the background for an unpredictable amount of time.
-     */
     reconnectionAttempts: Infinity,
 
-    /*
-     * Retry after 1 second initially.
-     */
     reconnectionDelay: 1000,
 
-    /*
-     * Never wait more than 5 seconds between attempts.
-     */
     reconnectionDelayMax: 5000,
 
-    /*
-     * Add a little randomization to retry timing.
-     */
     randomizationFactor: 0.5,
 
-    /*
-     * IMPORTANT:
-     *
-     * Do NOT connect immediately.
-     *
-     * React needs to register its room/message listeners
-     * before the backend sends `room:joined`.
-     */
     autoConnect: false,
 
-    /*
-     * Do not force the socket closed because of browser
-     * page lifecycle behavior.
-     */
     closeOnBeforeunload: false,
   });
 
   /*
-   * Socket connection logging.
-   *
    * Never log sessionId or sessionSecret.
    */
   socket.on('connect', () => {
@@ -235,13 +154,6 @@ export function connectSocket({
       'Socket connection error:',
       error?.message || error
     );
-
-    /*
-     * Do NOT redirect here.
-     *
-     * A connection error can be temporary.
-     * Socket.IO will automatically retry.
-     */
   });
 
   socket.on('disconnect', (reason) => {
@@ -259,11 +171,8 @@ export function connectSocket({
   });
 
   /*
-   * IMPORTANT:
-   *
-   * Do this AFTER all socket listeners above have been
-   * attached, but asynchronously so RoomContext can also
-   * register its listeners.
+   * Wait asynchronously so RoomContext can register
+   * its listeners before the backend sends room events.
    */
   scheduleInitialConnection(socket);
 
@@ -272,8 +181,6 @@ export function connectSocket({
 
 /**
  * Explicitly reconnect the existing socket.
- *
- * Used when a mobile browser becomes active again.
  */
 export function reconnectSocket() {
   if (!socket) {
@@ -401,11 +308,6 @@ function waitForConnection(timeout = 15000) {
       finishResolve();
     };
 
-    /*
-     * Do NOT reject immediately on connect_error.
-     *
-     * Socket.IO may still be reconnecting.
-     */
     const handleError = (error) => {
       console.error(
         'Connection attempt failed:',
@@ -431,10 +333,6 @@ function waitForConnection(timeout = 15000) {
       handleError
     );
 
-    /*
-     * If the initial connection has not happened yet,
-     * start it now.
-     */
     if (
       !socket.connected &&
       !socket.active
@@ -657,6 +555,34 @@ export function deleteMessage(
 }
 
 /**
+ * Report a screenshot detection.
+ *
+ * SECURITY:
+ * - No participantId is supplied by the client.
+ * - No sessionId is supplied in the event payload.
+ * - No sessionSecret is supplied in the event payload.
+ *
+ * The backend must identify the participant from the
+ * already-authenticated Socket.IO connection.
+ */
+export function reportScreenshot() {
+  if (
+    !socket ||
+    !socket.connected
+  ) {
+    console.warn(
+      'Cannot report screenshot: socket is unavailable'
+    );
+
+    return;
+  }
+
+  socket.emit(
+    'screenshot:detected'
+  );
+}
+
+/**
  * Typing events.
  */
 export function emitTypingStart() {
@@ -829,20 +755,11 @@ export function extendExpiration(
 /**
  * Destroy the room.
  *
- * IMPORTANT:
- * The backend must acknowledge the request
- * with:
+ * The backend must acknowledge the request with:
  *
  * {
  *   ok: true
  * }
- *
- * The promise resolves only after the backend
- * confirms that the room was destroyed.
- *
- * The request is also cleaned up if:
- * - the socket disconnects
- * - the request times out
  */
 export function destroyRoom() {
   return new Promise(
@@ -916,11 +833,6 @@ export function destroyRoom() {
         );
       };
 
-      /*
-       * If the server does not acknowledge the
-       * destroy request within 10 seconds, fail
-       * the operation instead of hanging forever.
-       */
       timeout = setTimeout(() => {
         finishReject(
           new Error(
@@ -929,19 +841,11 @@ export function destroyRoom() {
         );
       }, 10000);
 
-      /*
-       * Watch for an unexpected socket disconnect
-       * while waiting for the backend acknowledgement.
-       */
       socket.once(
         'disconnect',
         handleDisconnect
       );
 
-      /*
-       * Send the authenticated room destruction
-       * request to the backend.
-       */
       socket.emit(
         'room:destroy',
         (response) => {

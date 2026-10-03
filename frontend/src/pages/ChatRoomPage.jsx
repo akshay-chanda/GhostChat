@@ -40,7 +40,6 @@ import SettingsModal from '../components/room/SettingsModal';
 import ConfirmationModal from '../components/room/ConfirmationModal';
 import Watermark from '../components/security/Watermark';
 import UploadProgress from '../components/files/UploadProgress';
-import Toast from '../components/common/Toast';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 
 // --------------------------------------------------
@@ -77,12 +76,6 @@ export default function ChatRoomPage() {
   // --------------------------------------------------
 
   const [session] = useState(() => {
-    /*
-     * Normal navigation from Join Room / Create Room.
-     *
-     * All required private credentials must be supplied
-     * through router state.
-     */
     if (
       location.state?.password &&
       location.state?.sessionId &&
@@ -96,24 +89,11 @@ export default function ChatRoomPage() {
       };
     }
 
-    /*
-     * No session is restored from browser storage.
-     *
-     * This is intentional for security.
-     */
     return null;
   });
 
   // --------------------------------------------------
   // Register HTTP authentication credentials
-  //
-  // api.js keeps these credentials only in JavaScript
-  // memory and sends them through private HTTP headers:
-  //
-  //   X-Session-Id
-  //   X-Session-Secret
-  //
-  // No cookie is required.
   // --------------------------------------------------
 
   useEffect(() => {
@@ -243,6 +223,18 @@ function ChatRoomLayout({
 
     ready,
 
+    // --------------------------------------------------
+    // Screenshot detection
+    //
+    // RoomContext provides this function.
+    // It silently emits the screenshot event through
+    // Socket.IO.
+    //
+    // The person taking the screenshot receives NO
+    // local notification.
+    // Other participants receive the notification.
+    // --------------------------------------------------
+    reportScreenshot,
   } = useRoom();
 
   const [settingsOpen, setSettingsOpen] =
@@ -254,7 +246,6 @@ function ChatRoomLayout({
   const [uploadError, setUploadError] =
     useState(null);
 
-  // Mobile participant drawer
   const [participantsOpen, setParticipantsOpen] =
     useState(false);
 
@@ -271,10 +262,6 @@ function ChatRoomLayout({
       leaveRoom();
     }
 
-    /*
-     * Remove the private HTTP credentials from memory
-     * before leaving the room.
-     */
     clearSessionCredentials();
 
     navigate('/', {
@@ -287,11 +274,6 @@ function ChatRoomLayout({
 
   // --------------------------------------------------
   // Destroy room
-  //
-  // Host action:
-  //   1. Destroy the room on the backend.
-  //   2. Clear private credentials.
-  //   3. Return to the home page.
   // --------------------------------------------------
 
   const handleDestroyRoom = useCallback(async () => {
@@ -304,10 +286,6 @@ function ChatRoomLayout({
         await destroyRoom();
       }
 
-      /*
-       * Remove the private HTTP credentials from memory
-       * after the backend confirms room destruction.
-       */
       clearSessionCredentials();
 
       navigate('/', {
@@ -319,8 +297,6 @@ function ChatRoomLayout({
         error
       );
 
-      // Keep the user inside the room if the
-      // destroy request failed.
       setConfirmAction(null);
     }
   }, [
@@ -341,9 +317,6 @@ function ChatRoomLayout({
       leaveRoom();
     }
 
-    /*
-     * Remove the private HTTP credentials from memory.
-     */
     clearSessionCredentials();
 
     navigate('/room-expired', {
@@ -364,12 +337,50 @@ function ChatRoomLayout({
 
   // --------------------------------------------------
   // Screenshot detection
+  //
+  // IMPORTANT:
+  //
+  // The screenshot detection hook only reports the
+  // event. There is intentionally NO local toast.
+  //
+  // Flow:
+  //
+  // Browser
+  //   ↓
+  // handleScreenshotDetected()
+  //   ↓
+  // reportScreenshot()
+  //   ↓
+  // Socket.IO
+  //   ↓
+  // Backend
+  //   ↓
+  // Other room participants
+  //
+  // RoomContext ignores the event for the participant
+  // who originally triggered it.
+  //
+  // Therefore:
+  //
+  // A takes screenshot
+  //   -> A sees nothing
+  //   -> B/C see "A took a screenshot."
+  //
+  // Browser screenshot detection remains best-effort.
   // --------------------------------------------------
 
-  const {
-    detected: screenshotDetected,
-    dismiss: dismissScreenshotToast,
-  } = useScreenshotDetection();
+  const handleScreenshotDetected = useCallback(() => {
+    if (
+      typeof reportScreenshot ===
+      'function'
+    ) {
+      reportScreenshot();
+    }
+  }, [reportScreenshot]);
+
+  useScreenshotDetection(
+    handleScreenshotDetected
+  );
 
   // --------------------------------------------------
   // File attachment
@@ -483,40 +494,6 @@ function ChatRoomLayout({
         anonymousName={anonymousName}
         roomId={roomId}
       />
-
-      {screenshotDetected && (
-        <div
-          className="
-            pointer-events-none
-            fixed
-            left-2
-            right-2
-            top-3
-            z-[10000]
-            flex
-            justify-center
-            sm:left-3
-            sm:right-3
-            sm:top-4
-          "
-        >
-          <div
-            className="
-              pointer-events-auto
-              min-w-0
-              max-w-full
-            "
-          >
-            <Toast
-              message="Screenshot detected"
-              variant="warning"
-              onDismiss={
-                dismissScreenshotToast
-              }
-            />
-          </div>
-        </div>
-      )}
 
       {/* =================================================
           ROOM HEADER

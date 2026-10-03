@@ -30,6 +30,10 @@ import {
   destroyRoom as emitDestroyRoom,
   removeParticipant as emitRemoveParticipant,
   clearMessages as emitClearMessages,
+
+  // Screenshot notification
+  reportScreenshot as emitScreenshotDetected,
+
   on,
 } from '../services/socketService';
 
@@ -283,6 +287,133 @@ export function RoomProvider({
   }, [roomKey]);
 
   // --------------------------------------------------
+  // Screenshot notification
+  // --------------------------------------------------
+  //
+  // Backend broadcasts the screenshot event to everyone
+  // in the room.
+  //
+  // IMPORTANT:
+  //
+  // The participant who triggered the screenshot event
+  // must NOT receive a notification about their own event.
+  //
+  // Other participants WILL receive:
+  //
+  //   "AnonymousName took a screenshot."
+  //
+  // The backend remains responsible for authenticating
+  // and broadcasting the event.
+  // --------------------------------------------------
+
+  useEffect(() => {
+    if (!roomKey) {
+      return undefined;
+    }
+
+    const offScreenshotDetected = on(
+      'screenshot:detected',
+      (payload = {}) => {
+        const detectedParticipantId =
+          payload.participantId ||
+          payload.id ||
+          null;
+
+        const detectedName =
+          payload.anonymousName ||
+          payload.senderName ||
+          payload.name ||
+          'A participant';
+
+        /*
+         * Ignore malformed screenshot events.
+         */
+        if (!detectedParticipantId) {
+          console.warn(
+            '[RoomContext] Screenshot event received without participant ID:',
+            payload
+          );
+
+          return;
+        }
+
+        /*
+         * IMPORTANT:
+         *
+         * The backend broadcasts the event to everyone,
+         * including the participant who took the screenshot.
+         *
+         * Do NOT add a system message for that participant.
+         *
+         * This means:
+         *
+         * A takes screenshot
+         *   -> A sees nothing
+         *
+         * B takes screenshot
+         *   -> B sees nothing
+         *
+         * Other participants see:
+         *   -> "A took a screenshot."
+         */
+        if (
+          participantId &&
+          detectedParticipantId === participantId
+        ) {
+          return;
+        }
+
+        /*
+         * Do not create a duplicate notification if the
+         * same screenshot event is received more than once.
+         */
+        setMessages((previousMessages) => {
+          const eventId =
+            payload.eventId ||
+            `${detectedParticipantId}-${payload.timestamp || ''}`;
+
+          const alreadyExists =
+            previousMessages.some(
+              (message) =>
+                message.type === 'system' &&
+                message.screenshotEventId === eventId
+            );
+
+          if (alreadyExists) {
+            return previousMessages;
+          }
+
+          const timestamp =
+            payload.timestamp ||
+            new Date().toISOString();
+
+          return [
+            ...previousMessages,
+            {
+              id:
+                `screenshot-${eventId}`,
+              type: 'system',
+              content:
+                `${detectedName} took a screenshot.`,
+              timestamp,
+              screenshotEventId: eventId,
+              screenshotParticipantId:
+                detectedParticipantId,
+            },
+          ];
+        });
+      }
+    );
+
+    return () => {
+      offScreenshotDetected?.();
+    };
+  }, [
+    roomKey,
+    participantId,
+  ]);
+
+  // --------------------------------------------------
   // Room events
   // --------------------------------------------------
 
@@ -443,16 +574,6 @@ export function RoomProvider({
 
         /*
          * The backend is authoritative for deletion.
-         *
-         * This event is sent after:
-         *
-         * 1. Ownership was verified.
-         * 2. File/voice encrypted bytes were deleted.
-         * 3. File metadata was deleted.
-         * 4. The message was removed from memoryStore.
-         *
-         * Therefore BOTH the sender and all receivers
-         * remove the message here.
          */
         setMessages(
           (previousMessages) =>
@@ -528,6 +649,38 @@ export function RoomProvider({
     roomKey,
     leaveRoomAndGoHome,
     handleRoomClosed,
+  ]);
+
+  // --------------------------------------------------
+  // Report screenshot
+  // --------------------------------------------------
+
+  const reportScreenshot = useCallback(() => {
+    if (!roomKey) {
+      return;
+    }
+
+    if (!sessionId || !sessionSecret) {
+      console.warn(
+        '[RoomContext] Cannot report screenshot without an authenticated session.'
+      );
+
+      return;
+    }
+
+    /*
+     * The actual Socket.IO emission is handled by
+     * socketService.
+     *
+     * Only the authenticated socket/session is used.
+     * sessionId/sessionSecret are NOT included in the
+     * screenshot event payload.
+     */
+    emitScreenshotDetected();
+  }, [
+    roomKey,
+    sessionId,
+    sessionSecret,
   ]);
 
   // --------------------------------------------------
@@ -614,27 +767,10 @@ export function RoomProvider({
 
   const deleteMessage = useCallback(
     (message) => {
-      /*
-       * ChatWindow passes the COMPLETE message object.
-       *
-       * Text message:
-       *   message.id
-       *
-       * Voice/file message:
-       *   message.id
-       *   message.file.id
-       *
-       * The backend uses message.id as the authoritative
-       * message identifier.
-       */
       if (!message) {
         return;
       }
 
-      /*
-       * Keep compatibility with callers that may still
-       * pass a plain message ID.
-       */
       const messageId =
         typeof message === 'string'
           ? message
@@ -650,10 +786,6 @@ export function RoomProvider({
       }
 
       /*
-       * IMPORTANT:
-       *
-       * Do NOT remove the message locally here.
-       *
        * The backend is responsible for:
        *
        * 1. Authenticating the requester.
@@ -661,10 +793,7 @@ export function RoomProvider({
        * 3. Deleting encrypted file/voice bytes.
        * 4. Deleting file metadata.
        * 5. Removing the message from memoryStore.
-       * 6. Broadcasting message:delete to everyone.
-       *
-       * The `message:delete` listener above then removes
-       * the message from this client's UI.
+       * 6. Broadcasting message:delete.
        */
       emitDeleteMessage(messageId);
     },
@@ -818,12 +947,6 @@ export function RoomProvider({
       const result =
         await sendFile(audioFile);
 
-      /*
-       * The backend file message contains the encrypted
-       * audio metadata required by remote clients.
-       *
-       * Duration is retained locally in this return value.
-       */
       const numericDuration =
         Number(duration);
 
@@ -1071,6 +1194,12 @@ export function RoomProvider({
 
     sendMessage,
     deleteMessage,
+
+    // ----------------------------------------------
+    // Screenshot notification
+    // ----------------------------------------------
+
+    reportScreenshot,
 
     // ----------------------------------------------
     // Files / Voice
