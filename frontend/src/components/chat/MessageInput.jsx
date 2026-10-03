@@ -336,7 +336,6 @@ export default function MessageInput({
       }
 
       try {
-        // Make absolutely sure no previous context survives.
         stopMicrophoneDiagnostics();
 
         const audioContext =
@@ -554,16 +553,6 @@ export default function MessageInput({
         testAudio.preload = 'metadata';
         testAudio.src = testUrl;
 
-        /*
-         * IMPORTANT:
-         *
-         * WebM duration metadata can be Infinity/NaN,
-         * especially on recordings created after a
-         * previous recording.
-         *
-         * Therefore metadata duration is only a hint.
-         * It must NOT cause immediate rejection.
-         */
         const metadataDuration =
           await new Promise((resolve) => {
             let finished = false;
@@ -604,12 +593,6 @@ export default function MessageInput({
               ) {
                 resolve(numericDuration);
               } else {
-                /*
-                 * Do NOT reject here.
-                 *
-                 * decodeAudioData below can still
-                 * determine the real duration.
-                 */
                 resolve(0);
               }
             };
@@ -643,12 +626,6 @@ export default function MessageInput({
 
               finished = true;
               cleanup();
-
-              /*
-               * Don't immediately reject here either.
-               * Web Audio decoding below is the real
-               * validation step.
-               */
               resolve(0);
             };
 
@@ -669,11 +646,6 @@ export default function MessageInput({
 
             testAudio.load();
 
-            /*
-             * Some browsers can leave metadata unresolved.
-             * Give it a short window, then continue to
-             * Web Audio decoding.
-             */
             setTimeout(() => {
               if (finished) {
                 return;
@@ -826,12 +798,6 @@ export default function MessageInput({
           }
         }
 
-        /*
-         * Prefer decoded duration.
-         *
-         * Only fall back to metadata duration if
-         * Web Audio isn't available.
-         */
         if (
           !Number.isFinite(
             decodedDuration
@@ -877,10 +843,6 @@ export default function MessageInput({
     stoppingRecordingRef.current = true;
 
     try {
-      /*
-       * stop() automatically produces the final
-       * dataavailable event before onstop.
-       */
       recorder.stop();
     } catch (error) {
       console.error(
@@ -895,6 +857,91 @@ export default function MessageInput({
       );
     }
   }, [resetRecordingState]);
+
+  // --------------------------------------------------
+  // CANCEL RECORDING
+  // --------------------------------------------------
+
+  const cancelRecording = useCallback(() => {
+    const recorder =
+      mediaRecorderRef.current;
+
+    console.log(
+      'Voice recording cancelled.'
+    );
+
+    /*
+     * Mark the recorder as stopping so any
+     * pending UI action cannot finish it.
+     */
+    stoppingRecordingRef.current = true;
+
+    /*
+     * Stop the timer immediately.
+     */
+    if (recordingTimerRef.current) {
+      clearInterval(
+        recordingTimerRef.current
+      );
+
+      recordingTimerRef.current = null;
+    }
+
+    /*
+     * Remove recorder callbacks BEFORE stopping
+     * the recorder. This guarantees that the
+     * final dataavailable/onstop events cannot
+     * validate or send the cancelled recording.
+     */
+    if (recorder) {
+      try {
+        recorder.ondataavailable = null;
+        recorder.onstop = null;
+        recorder.onerror = null;
+
+        if (recorder.state !== 'inactive') {
+          recorder.stop();
+        }
+      } catch (error) {
+        console.warn(
+          'Voice recorder cancel cleanup failed:',
+          error
+        );
+      }
+    }
+
+    /*
+     * Stop microphone diagnostics and microphone
+     * tracks immediately.
+     */
+    stopMicrophoneDiagnostics();
+    stopMediaStream();
+
+    /*
+     * Completely discard the recording.
+     */
+    mediaRecorderRef.current = null;
+    recordingChunksRef.current = [];
+    recordingStartTimeRef.current = null;
+    stoppingRecordingRef.current = false;
+
+    /*
+     * Reset recording UI.
+     */
+    setIsRecording(false);
+    setRecordingTime(0);
+    setVoiceError(null);
+
+    /*
+     * Return focus to the message box.
+     */
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+    });
+  }, [
+    stopMicrophoneDiagnostics,
+    stopMediaStream,
+  ]);
 
   // --------------------------------------------------
   // START RECORDING
@@ -914,10 +961,6 @@ export default function MessageInput({
       setVoiceError(null);
       setSendError(null);
 
-      /*
-       * Extra protection against stale state from
-       * a previous recording.
-       */
       if (recordingTimerRef.current) {
         clearInterval(
           recordingTimerRef.current
@@ -1027,10 +1070,6 @@ export default function MessageInput({
         mediaStreamRef.current =
           stream;
 
-        /*
-         * Start microphone diagnostics BEFORE
-         * MediaRecorder.
-         */
         await startMicrophoneDiagnostics(
           stream
         );
@@ -1192,20 +1231,12 @@ export default function MessageInput({
               }
             );
 
-            /*
-             * Save diagnostics BEFORE cleaning
-             * the analyser.
-             */
             const microphonePeak =
               microphonePeakRef.current;
 
             const microphoneSamplesDetected =
               microphoneSamplesDetectedRef.current;
 
-            /*
-             * Clear recording UI/timer immediately.
-             * The Blob is still safely held in `chunks`.
-             */
             if (
               recordingTimerRef.current
             ) {
@@ -1229,10 +1260,6 @@ export default function MessageInput({
             setIsRecording(false);
             setRecordingTime(0);
 
-            /*
-             * Stop microphone resources after the
-             * final MediaRecorder dataavailable event.
-             */
             stopMicrophoneDiagnostics();
             stopMediaStream();
 
@@ -1250,10 +1277,6 @@ export default function MessageInput({
               return;
             }
 
-            /*
-             * If the microphone analyser saw absolutely
-             * no signal, tell the user immediately.
-             */
             if (
               !microphoneSamplesDetected
             ) {
@@ -1292,9 +1315,6 @@ export default function MessageInput({
               return;
             }
 
-            /*
-             * Construct one final WebM/Opus Blob.
-             */
             const audioBlob =
               new Blob(
                 chunks,
@@ -1828,13 +1848,45 @@ export default function MessageInput({
             )}
           </span>
 
+          {/* CANCEL RECORDING */}
+
+          <button
+            type="button"
+            onClick={
+              cancelRecording
+            }
+            title="Cancel recording"
+            aria-label="Cancel recording"
+            className="
+              flex
+              min-h-10
+              min-w-10
+              shrink-0
+              items-center
+              justify-center
+              rounded-full
+              bg-white/10
+              p-2.5
+              text-[#94A3B8]
+              transition-colors
+              hover:bg-white/15
+              hover:text-[#F8FAFC]
+              active:scale-95
+              touch-manipulation
+            "
+          >
+            <X className="h-4 w-4" />
+          </button>
+
+          {/* STOP AND SEND */}
+
           <button
             type="button"
             onClick={
               handleVoiceButton
             }
-            title="Stop recording"
-            aria-label="Stop recording"
+            title="Stop recording and send"
+            aria-label="Stop recording and send"
             className="
               flex
               min-h-10
