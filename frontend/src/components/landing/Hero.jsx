@@ -7,12 +7,6 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 
-/**
- * Hero
- *
- * Main landing-page introduction.
- * Responsive and interactive across desktop, tablet and mobile.
- */
 export default function Hero() {
   const [activeFeature, setActiveFeature] = useState(null);
 
@@ -46,16 +40,15 @@ export default function Hero() {
         group/hero
         relative
         flex
-        min-h-screen
+        min-h-[calc(100svh-76px)]
         items-center
         justify-center
         overflow-hidden
         px-4
-        pb-16
-        pt-20
+        py-8
+        sm:min-h-screen
         sm:px-6
-        sm:pb-20
-        sm:pt-28
+        sm:py-20
       "
     >
       {/* Background grid */}
@@ -137,8 +130,9 @@ export default function Hero() {
           absolute
           left-1/2
           top-1/2
-          h-[460px]
-          w-[min(900px,92vw)]
+          h-[calc(100%-24px)]
+          w-[calc(100%-24px)]
+          max-w-[900px]
           -translate-x-1/2
           -translate-y-1/2
           rounded-[32px]
@@ -148,6 +142,7 @@ export default function Hero() {
           duration-500
           group-hover/hero:border-[#00D9FF]/[0.06]
           sm:h-[500px]
+          sm:w-[min(900px,92vw)]
           sm:rounded-[40px]
         "
       />
@@ -161,9 +156,9 @@ export default function Hero() {
           flex
           w-full
           max-w-4xl
-          -translate-y-1
           flex-col
           items-center
+          justify-center
           text-center
           sm:-translate-y-5
         "
@@ -171,7 +166,7 @@ export default function Hero() {
         {/* Eyebrow */}
         <div
           className="
-            mb-5
+            mb-6
             inline-flex
             max-w-full
             items-center
@@ -188,7 +183,6 @@ export default function Hero() {
             hover:border-[#00D9FF]/40
             hover:bg-[#00D9FF]/[0.08]
             hover:shadow-[0_0_20px_rgba(0,217,255,0.08)]
-            sm:mb-6
             sm:gap-2
             sm:px-3.5
           "
@@ -207,10 +201,10 @@ export default function Hero() {
 
           <span
             className="
-              text-[8px]
+              text-[8.5px]
               font-semibold
               uppercase
-              tracking-[0.1em]
+              tracking-[0.11em]
               text-[#7DDFF0]
               sm:text-xs
               sm:tracking-[0.16em]
@@ -236,7 +230,9 @@ export default function Hero() {
             lg:text-[74px]
           "
         >
-          <span className="block">Say it.</span>
+          <span className="block">
+            Say it.
+          </span>
 
           <span
             className="
@@ -264,7 +260,7 @@ export default function Hero() {
             max-w-[345px]
             px-1
             text-[13.5px]
-            leading-[1.55]
+            leading-[1.6]
             text-[#94A3B8]
             sm:mt-7
             sm:max-w-2xl
@@ -288,12 +284,11 @@ export default function Hero() {
             flex-col
             items-center
             justify-center
-            gap-2
+            gap-2.5
             sm:mt-8
             sm:w-auto
             sm:max-w-none
             sm:flex-row
-            sm:items-center
             sm:gap-3
           "
         >
@@ -396,7 +391,7 @@ export default function Hero() {
         {/* Feature cards */}
         <div
           className="
-            mt-7
+            mt-8
             grid
             w-full
             max-w-[350px]
@@ -426,7 +421,7 @@ export default function Hero() {
                   group/feature
                   relative
                   flex
-                  min-h-[70px]
+                  min-h-[76px]
                   w-full
                   flex-col
                   items-center
@@ -477,7 +472,7 @@ export default function Hero() {
                     max-w-[105px]
                     text-[9.5px]
                     font-medium
-                    leading-[1.25]
+                    leading-[1.3]
                     transition-colors
                     duration-200
                     sm:max-w-none
